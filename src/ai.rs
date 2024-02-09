@@ -10,29 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::board::*;
 use crate::move_stats::{self, MoveStats, PreCalc};
 
-const EXPOLORE_CONSTANT: f32 = 0.3;
-
-const MAX_STEP_SIZE: u32 = 5_000_000;
-// A chosen number close to u32::MAX, but not too close, so we don't overflow
 const VISIT_LIMIT: u32 = 3_500_000_000;
-const MOVE_SEQUENCE: &str = ":e2:e8:e3:e7:e4:e6:d3h:d7h:e5:f7h:d4h";
-// we are working on: split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:d7h:e5:f7h:d4h
-//const PRECALC_FILE: &str =
-//    "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:d7h:e5:f7h:d4h/to_precalc.json";
-//const PRECALC_FOLDER: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:d7h:e5:f7h:d4h/precalc";
 
 const PRECALC_FILE: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:c6h/to_precalc.json";
 const PRECALC_FOLDER: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:c6h/precalc";
-
-// temporary :e2:e8:e3:d3h
-//const PRECALC_FILE: &str = "./split_up_pre_calcs/:e2:e8:e3:d3h/to_precalc.json";
-//const PRECALC_FOLDER: &str = "./split_up_pre_calcs/:e2:e8:e3:d3h/precalc";
-
-//const PRECALC_FILE: &str =
-//    "./pre_calc_old/to_precalc.json";
-//const PRECALC_FOLDER: &str = "./pre_calc_old/precalc";
-
-static CACHE_HITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 // This is the struct we will use to cache moves, the values are the best move from that board, and how strong the that calculated it was.
 pub struct AIControlledBoard {
@@ -225,6 +206,7 @@ impl MonteCarloTree {
             *self = Self::new()
         }
     }
+
     fn score_from_deeper_precalc(
         &mut self,
         board: &Board,
@@ -258,12 +240,11 @@ impl MonteCarloTree {
         score_deeper
     }
 
-    fn score_for_zero(&mut self, board: &Board) -> f32 {
+    fn score_for_zero(&mut self, board: &Board, pre_calc: &PreCalc) -> f32 {
         let scores = self.mc_node.scores();
         let mut score_current_player = 1.0 - scores.0 / scores.1 as f32;
         println!("SCORE CURRENT PLAYER: {:?}", score_current_player);
-        let precalc = PreCalc::open(PRECALC_FILE);
-        if let Some(score_deeper) = self.score_from_deeper_precalc(board, &precalc) {
+        if let Some(score_deeper) = self.score_from_deeper_precalc(board, &pre_calc) {
             if score_deeper.1 > score_current_player {
                 score_current_player = score_deeper.1;
             }
@@ -285,6 +266,7 @@ impl MonteCarloTree {
         new_logic: bool,
         roll_out_new: bool,
         number_of_averages: u32,
+        pre_calc: &PreCalc,
     ) -> Result<(Move, (f32, u32)), Box<dyn std::error::Error + Sync + Send>> {
         if number_of_simulations >= self.mc_node.number_visits() {
             if self.mc_node.number_visits() >= VISIT_LIMIT {
@@ -297,7 +279,6 @@ impl MonteCarloTree {
             number_of_simulations = 0;
         }
 
-        let pre_calc = PreCalc::open(PRECALC_FILE);
         if number_of_simulations >= 1 {
             let mut small_rng = SmallRng::from_entropy();
             let mut timings = Timings::default();
@@ -1104,10 +1085,15 @@ impl AIControlledBoard {
     pub fn decode(encoded: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let board = Board::decode(encoded)?;
 
-        let board_path = format!("{}/{}.mc_node", PRECALC_FOLDER, encoded);
         let mut relevant_mc_tree = MonteCarloTree::new();
-        if std::path::Path::new(&board_path).exists() {
-            relevant_mc_tree = MonteCarloTree::deserialize(&board_path);
+
+        // we only do this if target isn't wasm
+        if cfg!(not(target_arch = "wasm32")) {
+            // if in the folder precalc we have the board, we want to load the precalculated data into the MontecarloTree
+            let board_path = format!("{}/{}.mc_node", PRECALC_FOLDER, encoded);
+            if std::path::Path::new(&board_path).exists() {
+                relevant_mc_tree = MonteCarloTree::deserialize(&board_path);
+            }
         }
         Ok(Self {
             board,
@@ -1179,43 +1165,11 @@ impl AIControlledBoard {
         (move_result, number_of_simulations)
     }
 
-    pub fn game_score(&mut self, number_of_steps: u32) -> Vec<(Move, (f32, u32))> {
-        let step_size = 40_000;
-        let mut steps = 0;
-        let ai_move = loop {
-            steps += step_size;
-            let ai_move = self
-                .relevant_mc_tree
-                .decide_move(
-                    self.board.clone(),
-                    steps,
-                    Self::wall_value,
-                    0.5,
-                    true,
-                    true,
-                    100,
-                )
-                .unwrap();
-            if steps >= number_of_steps {
-                break ai_move;
-            }
-        };
-        println!(
-            "AI move estimates {:?}, so win rate is {:.1}%",
-            (ai_move.0, ai_move.1),
-            ai_move.1 .0 as f32 / ai_move.1 .1 as f32 * 100.0
-        );
-
-        match &self.relevant_mc_tree.mc_node {
-            MCNode::Branch { move_options, .. } => {
-                let move_options = move_options.as_ref().unwrap();
-                move_options.iter().map(|x| (x.0, x.1.scores())).collect()
-            }
-            _ => vec![],
-        }
-    }
-
-    pub fn ai_move(&mut self, number_of_steps: u32) -> (Move, (usize, usize), u32) {
+    pub fn ai_move(
+        &mut self,
+        number_of_steps: u32,
+        pre_calc: &PreCalc,
+    ) -> (Move, (usize, usize), u32) {
         let ai_move = self
             .relevant_mc_tree
             .decide_move(
@@ -1226,6 +1180,7 @@ impl AIControlledBoard {
                 true,
                 true,
                 100,
+                pre_calc,
             )
             .unwrap();
         println!(
@@ -1254,17 +1209,6 @@ impl AIControlledBoard {
         }
     }
 
-    // return true if its a valid move, false otherwise
-    pub fn player_move(&mut self, game_move: Move) -> PlayerMoveResult {
-        let move_result = self.game_move(game_move);
-        if move_result.0 != MoveResult::Valid {
-            return move_result.0.player_moved();
-        }
-        let ai_move = self.ai_move(300_000);
-
-        self.board.game_move(ai_move.0).ai_moved()
-    }
-
     pub fn wall_value(input: u8) -> f32 {
         if input <= 1 {
             // the last wall has a lot of value, cause playing it gives the opponent free reign
@@ -1284,142 +1228,6 @@ impl AIControlledBoard {
     }
 
     // this function return the (number of wins for player 0, number of games played)
-}
-
-// Here we will read game result data, to try and see how good our current roll out function is.
-// This by calculating the mean squared error distance between our prediction and the actual result.
-// We first parse the results, it is a csv file comma seperated, where the first column is the encoded board,
-// the second column is not relevant and the third column is the actual win rate. (which we want to predict)
-pub fn test_roll_out() {
-    let mut file = std::fs::File::open("game_results_board.csv").unwrap();
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).unwrap();
-    let mut total_error = 0.0;
-    let mut total_error_squared = 0.0;
-    let mut total_count = 0;
-    let mut total_skipped_count = 0;
-    let mut total_pred_error = 0.0;
-    let mut total_pred_error_squared = 0.0;
-    let mut total_left_rel_error = 0.0;
-    let mut total_left_rel_error_squared = 0.0;
-    // first we print the header names
-    println!(
-        "{},{},{},{},{},{},{},{},{}",
-        "turn",
-        "dist_0",
-        "dist_1",
-        "walls_0",
-        "walls_1",
-        "squares_0",
-        "squares_1",
-        "squares_diff",
-        "actual_win_rate"
-    );
-    let mut game = 0;
-    for line in contents.lines() {
-        let mut split = line.split(',');
-        let encoded = split.next().unwrap();
-
-        let pred_win_rate: f32 = split.next().unwrap().trim().parse().unwrap();
-        let actual_win_rate: f32 = split.next().unwrap().trim().parse().unwrap();
-        let board = Board::decode(encoded).unwrap();
-        if board.turn == 1 {
-            game += 1;
-        }
-        if board.turn < 6 || pred_win_rate < 0.05 || pred_win_rate > 0.95 {
-            total_skipped_count += 1;
-            continue;
-        }
-
-        let mut small_rng = SmallRng::from_entropy();
-        let cache = [
-            NextMovesCache::new(&board, 0),
-            NextMovesCache::new(&board, 1),
-        ];
-        let blocked_off_0 = board.open_routes.test_check_lines(
-            board.pawns[0],
-            &cache[0].relevant_squares,
-            cache[0].distances_to_finish,
-        );
-        let blocked_off_1 = board.open_routes.test_check_lines(
-            board.pawns[1],
-            &cache[1].relevant_squares,
-            cache[1].distances_to_finish,
-        );
-        let left_rel_0 = cache[0]
-            .relevant_squares
-            .number_of_left_relevant(blocked_off_0);
-        let left_rel_1 = cache[1]
-            .relevant_squares
-            .number_of_left_relevant(blocked_off_1);
-        //println!(
-        //    "{} pred_win_rate: {}, left relevant squares: {}, {}, {}",
-        //    encoded, pred_win_rate, left_rel_0, left_rel_1, actual_win_rate,
-        //);
-        if game % 5 != 0 {
-            //   println!(
-            //       "{}.0,{}.0,{}.0,{}.0,{}.0,{}.0,{}.0,{}.0,{:.2}",
-            //       board.turn % 2,
-            //       cache[0].distances_to_finish.dist[board.pawns[0].position].unwrap(),
-            //       cache[1].distances_to_finish.dist[board.pawns[1].position].unwrap(),
-            //       board.pawns[0].number_of_walls_left,
-            //       board.pawns[1].number_of_walls_left,
-            //       left_rel_0,
-            //       left_rel_1,
-            //       left_rel_1 - left_rel_0,
-            //       actual_win_rate //((actual_win_rate > 0.5) as u8 as f32)
-            //   );
-        }
-        //if (left_rel_0 - left_rel_1).abs() <= 25 {
-        //    total_skipped_count += 1;
-
-        //    continue;
-        //}
-        let left_rel_pred = ((left_rel_0 < left_rel_1) as u8) as f32;
-
-        let left_rel_error = (actual_win_rate - left_rel_pred).abs();
-        total_left_rel_error += left_rel_error;
-        total_left_rel_error_squared += left_rel_error * left_rel_error;
-
-        //println!("BOARD: {}", board.encode());
-        let (win_rate, _) = board.roll_out(
-            &mut small_rng,
-            AIControlledBoard::wall_value,
-            &cache,
-            false,
-            100,
-        );
-        let error = win_rate - actual_win_rate;
-        total_error += error.abs();
-        total_error_squared += error * error;
-
-        let pred_error = pred_win_rate - actual_win_rate;
-        total_pred_error += pred_error.abs();
-        total_pred_error_squared += pred_error * pred_error;
-
-        total_count += 1;
-    }
-    println!(
-        "total count: {}, total_skipped count {}",
-        total_count, total_skipped_count
-    );
-    println!(
-        "mean error left_rel: {:.3}, mean error left rel squared: {:.3}",
-        total_left_rel_error / total_count as f32,
-        total_left_rel_error_squared / total_count as f32
-    );
-
-    println!(
-        "mean error: {:.3}, mean error squared: {:.3}",
-        total_error / total_count as f32,
-        total_error_squared / total_count as f32
-    );
-
-    println!(
-        "Monte carlo predicitons mean error: {:.3}, mean error squared: {:.3}",
-        total_pred_error / total_count as f32,
-        total_pred_error_squared / total_count as f32
-    );
 }
 
 impl Board {
@@ -1700,7 +1508,7 @@ fn select_most_promising_branch<'a>(
                 highest_scores.0,
                 highest_scores.1,
                 parent_visits,
-                EXPOLORE_CONSTANT,
+                explore_constant,
                 second_score,
                 0,
             ),
@@ -1781,323 +1589,6 @@ pub fn select_robust_best_branch<'a>(
     //}
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct MemoryNode {
-    move_options: Vec<(Move, MemoryNode)>,
-    score: (f32, u32),
-    turn_board: u8,
-    depth: u8,
-    player: u8,
-}
-
-#[allow(dead_code)]
-impl MemoryNode {
-    fn new_from_moves(move_options: Vec<(Move, (f32, u32))>, player: u8, turn_board: u8) -> Self {
-        let mut best_win_rate = 0.0 as f32;
-        let mut total_sims = 0;
-        for (game_move, score) in &move_options {
-            best_win_rate = best_win_rate.max(score.0 / score.1 as f32);
-            total_sims += score.1;
-        }
-        let score = 1.0 - best_win_rate;
-        println!("SCORE for memory node: {:?}", score);
-        MemoryNode {
-            move_options: move_options
-                .into_iter()
-                .map(|(x, score)| (x, MemoryNode::new(score, player, turn_board + 1)))
-                .collect(),
-            score: (score * total_sims as f32, total_sims),
-            turn_board,
-            depth: 1,
-            player,
-        }
-    }
-    fn new(score: (f32, u32), player: u8, turn_board: u8) -> Self {
-        MemoryNode {
-            move_options: vec![],
-            score,
-            turn_board,
-            depth: 0,
-            player,
-        }
-    }
-
-    fn win_rate(&self) -> f32 {
-        self.score.0 / self.score.1 as f32
-    }
-
-    fn update_win_rate(&mut self) {
-        let mut max_win_rate: f32 = 0.0;
-        for (_, node) in &self.move_options {
-            max_win_rate = max_win_rate.max(node.win_rate());
-        }
-        self.score.0 = 1.0 - max_win_rate;
-        self.score.1 = 1;
-    }
-
-    fn update_depth(&mut self, player: u8, board_turn: u8) {
-        let mut min_depth: u8 = 100;
-        if player == board_turn % 2 {
-            if let Some((_, node)) = self
-                .move_options
-                .iter()
-                .max_by_key(|x| (x.1.win_rate() * 100_000.0) as i32)
-            {
-                min_depth = node.depth;
-            } else {
-                min_depth = 0;
-            }
-        } else {
-            for (_, node) in self.move_options.iter().filter(|x| x.1.win_rate() > 0.45) {
-                min_depth = min_depth.min(node.depth);
-            }
-        }
-        self.depth = min_depth + 1;
-    }
-
-    fn recursively_fix_depth(&mut self, player: u8, board_turn: u8, board: Board) {
-        if board.encode() == "7;10E5;10E6" {
-            println!("FOUND BOARD");
-            println!(
-                "move options: {}, depth: {}",
-                self.move_options.len(),
-                self.depth
-            );
-            for (game_move, node) in &self.move_options {
-                println!(
-                    "move: {:?}, win rate: {:.4}, depth: {}",
-                    game_move,
-                    node.win_rate(),
-                    node.depth
-                );
-            }
-        }
-        if board.encode() == "8;10E5;10E4" {
-            println!("FOUND BOARD");
-            println!(
-                "move options: {}, depth: {}",
-                self.move_options.len(),
-                self.depth
-            );
-            for (game_move, node) in &self.move_options {
-                println!(
-                    "move: {:?}, win rate: {:.4}, depth: {}",
-                    game_move,
-                    node.win_rate(),
-                    node.depth
-                );
-            }
-        }
-        for (game_move, node) in &mut self.move_options {
-            let mut next_board = board.clone();
-            next_board.game_move(*game_move);
-            node.recursively_fix_depth(player, board_turn + 1, next_board);
-        }
-        if self.move_options.len() == 0 {
-            self.depth = 0;
-        } else {
-            self.update_depth(player, board_turn);
-        }
-    }
-
-    fn expand_children(
-        &mut self,
-        board: Board,
-        mc_simulations: u32,
-        move_stats: MoveStats,
-        player: u8,
-    ) -> Option<()> {
-        let mut next_moves: Vec<Move> = move_stats
-            .moves_seen(&board, false)
-            .into_iter()
-            .map(|x| x.1)
-            .collect();
-        //if pawn_index == board.turn %2 {
-        //    // We take the move with the highest win rate.
-        //}
-
-        println!("EXPANDING CHILDREN FOR: {:?}", board.encode());
-        if next_moves.len() == 0 {
-            println!("REACHED A LEAF WITH NO CHILDREN, SO WE WILL USE OUR OWN LOGIC, WE TAKE ALL MOVES WITH MORE THEN 400_000 visits and a score better then 40%");
-            let mut ai_board = AIControlledBoard::from_board(board.clone());
-            let moves = ai_board.game_score(mc_simulations);
-            next_moves = moves
-                .into_iter()
-                .filter(|(_, score)| score.1 >= 200_000)
-                .filter(|(_, score)| score.0 / score.1 as f32 > 0.4)
-                .map(|(game_move, _)| game_move)
-                .collect();
-            if next_moves.len() == 0 {
-                println!("Still no moves, so we have finished exploring this branch");
-                self.depth = 100;
-            }
-        }
-
-        // We will never see mirrored move of course cause we are in openingbook expansion
-        for (i, move_option) in next_moves.into_iter().enumerate() {
-            println!("EXPANDING MOVE OPTION: {:?}", move_option);
-            let mut next_board = board.clone();
-            next_board.game_move(move_option);
-            let turn = next_board.turn;
-            let mut ai_board = AIControlledBoard::from_board(next_board);
-            let moves = ai_board.game_score(mc_simulations);
-
-            self.move_options.push((
-                move_option,
-                MemoryNode::new_from_moves(moves, player, turn as u8),
-            ));
-        }
-
-        self.update_win_rate();
-        self.depth = 1;
-        Some(())
-    }
-    // We select the child that has a win rate above 45% and the smallest depth.
-    fn select_child_to_expand(&mut self, player: u8, turn: u8) -> Option<&mut (Move, Self)> {
-        if self.move_options.len() == 0 {
-            return None;
-        }
-
-        if turn % 2 == player {
-            self.move_options
-                .iter_mut()
-                //.filter(|x| x.1.win_rate() > cutoff && x.1.depth == min_depth)
-                .max_by_key(|x| (x.1.win_rate() * 100_000.0) as u32)
-        } else {
-            let mut min_depth = self.move_options.iter().map(|x| x.1.depth).min()?;
-            if min_depth >= 100 {
-                min_depth = 150;
-            }
-            self.move_options
-                .sort_by_key(|x| (-x.1.win_rate() * 100_000.0) as i32);
-            self.move_options
-                .iter_mut()
-                .filter(|x| x.1.depth <= min_depth)
-                .next()
-        }
-    }
-    fn is_leaf(&self) -> bool {
-        self.move_options.len() == 0
-    }
-
-    fn expand(
-        &mut self,
-        mut board: Board,
-        mc_simulations: u32,
-        mut move_stats: MoveStats,
-        player: u8,
-    ) -> Option<()> {
-        let board_turn = board.turn as u8;
-        if self.is_leaf() {
-            self.expand_children(board, mc_simulations, move_stats, player)?;
-        } else {
-            let (game_move, node) = self.select_child_to_expand(player, board.turn as u8)?;
-            println!(
-                "Expanding: {:?} which has win rate: {}, for board {}",
-                game_move,
-                node.win_rate(),
-                board.encode()
-            );
-            move_stats.take_move(*game_move, false, &board);
-            board.game_move(*game_move);
-            node.expand(board, mc_simulations, move_stats, player)?;
-            self.update_depth(player, board_turn);
-            self.update_win_rate();
-        }
-        Some(())
-
-        // See if we need to update our depth
-    }
-
-    fn pretty_print(&self, board: &Board) {
-        if self.depth == 0 {
-            return ();
-        }
-        println!(
-            "Board: {}, win_rate {:.4}%, checked_to_depth: {}",
-            board.encode(),
-            self.win_rate() * 100.0,
-            self.depth
-        );
-        for (game_move, node) in &self.move_options {
-            let mut next_board = board.clone();
-            next_board.game_move(*game_move);
-            node.pretty_print(&next_board);
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct OpeningBook {
-    steps: MemoryNode,
-    mc_simulation_evaluation: u32,
-    file_name: String,
-    player: u8,
-}
-
-/// In the OpeningBook we will only store on of two mirrored moves, this saves us half the calculations.
-/// So for the first wall, we only store walls on left side of the board, so col < 4. Of course assuming that the pawn hasn't walked sideway yet.
-/// An first pawn move that is to the right, we will make into a pawn move to the left, Of course this only holds for the first sideways pawn move, after this,
-/// the symmetry has been broken.
-#[allow(dead_code)]
-impl OpeningBook {
-    fn fix_depth(&mut self) {
-        self.steps
-            .recursively_fix_depth(self.player, 0, Board::new());
-    }
-    fn pretty_print(&self) {
-        self.steps.pretty_print(&Board::new());
-    }
-    fn new_for_player_1(mc_simulation_evaluation: u32, file_name: &str) -> Self {
-        Self {
-            steps: MemoryNode::new((0.0, 0), 1, 0),
-            mc_simulation_evaluation,
-            file_name: file_name.to_string(),
-            player: 1,
-        }
-    }
-
-    fn load_from_disc(file_name: &str) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        let file = std::fs::File::open(file_name)?;
-        let reader = std::io::BufReader::new(file);
-        let mut opening_book: OpeningBook = bincode::deserialize_from(reader)?;
-        opening_book.file_name = file_name.to_string();
-
-        Ok(opening_book)
-    }
-
-    fn store_to_disc(
-        &self,
-        file_name: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-        let file = std::fs::File::create(file_name)?;
-        let writer = std::io::BufWriter::new(file);
-        bincode::serialize_into(writer, self)?;
-        Ok(())
-    }
-
-    fn open(file_name: &str) -> Self {
-        if let Ok(opening_book) = Self::load_from_disc(file_name) {
-            opening_book
-        } else {
-            Self::new_for_player_1(20_000_000, file_name)
-        }
-    }
-
-    fn expand(&mut self, steps: u32, move_stats: MoveStats) {
-        let board = Board::new();
-        for _ in 0..steps {
-            self.steps.expand(
-                board.clone(),
-                self.mc_simulation_evaluation,
-                move_stats.clone(),
-                self.player,
-            );
-            self.store_to_disc(&self.file_name).unwrap();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -2114,6 +1605,7 @@ mod tests {
         println!("Board size is: {}", std::mem::size_of::<Board>());
         println!("Board size is: {}", std::mem::size_of::<MinimalBoard>());
         let start = std::time::Instant::now();
+        let pre_calc = PreCalc::new();
         let chosen_move = board.relevant_mc_tree.decide_move(
             board.board.clone(),
             100_000,
@@ -2122,6 +1614,7 @@ mod tests {
             true,
             false,
             0,
+            &pre_calc,
         );
         println!(
             "Time for 100* 103 ({}) play throughs: {:?}",
@@ -2182,6 +1675,8 @@ mod tests {
             } else {
                 AIControlledBoard::wall_value
             };
+
+            let pre_calc = PreCalc::new();
             let chosen_move = board
                 .relevant_mc_tree
                 .decide_move(
@@ -2192,6 +1687,7 @@ mod tests {
                     players_turn.4,
                     players_turn.5,
                     players_turn.6,
+                    &pre_calc,
                 )
                 .unwrap();
 
@@ -2257,6 +1753,8 @@ mod tests {
         board.board.pawns[0].number_of_walls_left = 0;
         board.board.pawns[1].number_of_walls_left = 0;
         board.board.turn = 4;
+
+        let pre_calc = PreCalc::new();
         let chosen_move = board
             .relevant_mc_tree
             .decide_move(
@@ -2267,6 +1765,7 @@ mod tests {
                 true,
                 false,
                 100,
+                &pre_calc,
             )
             .unwrap();
         println!("chosen move is {:?}", (chosen_move.0, chosen_move.1));
@@ -2282,6 +1781,7 @@ mod tests {
                 true,
                 false,
                 100,
+                &pre_calc,
             )
             .unwrap();
         assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Up, None));
@@ -2298,6 +1798,7 @@ mod tests {
         board.board.pawns[0].number_of_walls_left = 1;
         board.board.pawns[1].number_of_walls_left = 0;
         board.board.turn = 4;
+        let pre_calc = PreCalc::new();
         let chosen_move = board
             .relevant_mc_tree
             .decide_move(
@@ -2308,6 +1809,7 @@ mod tests {
                 false,
                 false,
                 100,
+                &pre_calc,
             )
             .unwrap();
         println!(
@@ -2328,6 +1830,7 @@ mod tests {
                 false,
                 false,
                 100,
+                &pre_calc,
             )
             .unwrap();
         println!(
@@ -2477,29 +1980,13 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_node() {
-        let mut opening_book = OpeningBook::open("opening_book_new_player_1.bin");
-
-        opening_book.fix_depth();
-        opening_book.pretty_print();
-        let move_stats_data: MoveStats =
-            serde_json::from_str(&std::fs::read_to_string("move_stats").unwrap()).unwrap();
-        opening_book.expand(100, move_stats_data);
-        println!("{}", opening_book.steps.depth);
-    }
-
-    #[test]
-    fn test_roll_out_function() {
-        test_roll_out();
-    }
-    #[test]
     fn black_to_win_puzzle() {
         // See quoridor discord
         let board =
             Board::decode("32;3G5;2A5;A1h;C1v;D2h;F2h;H2h;C3v;B4h;D4v;B5h;D5h;G5h;C6v;D6h;A7h;C7h")
                 .unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(300_000);
+        let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
         assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Left, None));
 
         let board =
@@ -2507,7 +1994,7 @@ mod tests {
                 .unwrap();
 
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(400_000);
+        let chosen_move = ai_controlled.ai_move(400_000, &PreCalc::new());
 
         assert_eq!(
             chosen_move.0,
@@ -2522,7 +2009,7 @@ mod tests {
         )
         .unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(300_000);
+        let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
 
         assert_eq!(
             chosen_move.0,
@@ -2538,7 +2025,7 @@ mod tests {
         )
         .unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(300_000);
+        let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
 
         assert_eq!(
             chosen_move.0,
@@ -2554,7 +2041,7 @@ mod tests {
         )
         .unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(300_000);
+        let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
 
         assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Down, None));
     }
@@ -2563,7 +2050,7 @@ mod tests {
         // See quoridor discord
         let board = Board::decode("17;6D4;6D6;C2h;C4v;E5h;G5h;D6h;F6h;H6h;C7v").unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(10_300_000);
+        let chosen_move = ai_controlled.ai_move(10_300_000, &PreCalc::new());
 
         // To decide on this move, it needs a lottttttt of calculations
         assert_eq!(
@@ -2578,7 +2065,7 @@ mod tests {
         let board =
             Board::decode("12;5E8;4E3;A3v;B3v;C3h;E3v;A4h;D4v;E5v;D6v;F6h;H6h;E8h").unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(3200_000);
+        let chosen_move = ai_controlled.ai_move(3200_000, &PreCalc::new());
 
         // To decide on this move, it needs a lottttttt of calculations
         assert!(
@@ -2703,7 +2190,7 @@ mod tests {
                         board.relevant_mc_tree.mc_node.move_options().unwrap().len()
                     );
                 }
-                let _chosen_move = board.ai_move(total_simulations);
+                let _chosen_move = board.ai_move(total_simulations, &to_calc);
                 total_simulations += simulations_per_step;
                 println!(
                     "--------------------- USING {:.4} % BYTES",
@@ -2761,7 +2248,9 @@ mod tests {
             //    &board.board,
             //)
             //.unwrap();
-            let win_rate_zero = board.relevant_mc_tree.score_for_zero(&board.board);
+            let win_rate_zero = board
+                .relevant_mc_tree
+                .score_for_zero(&board.board, &to_calc);
             to_calc.insert_result(&board.board, win_rate_zero);
             to_calc.store(PRECALC_FILE);
         }

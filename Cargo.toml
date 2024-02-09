@@ -16,6 +16,7 @@ serde_json = "1"
 bitvec = "1"
 tokio = "1"
 sysinfo = "0.30"
+getrandom = { version = "0.2", features = ["js"] }
 
 [profile.release]
 lto = "fat"
