@@ -1,6 +1,10 @@
 use super::*;
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::atomic::AtomicU32;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum JumpResult {
@@ -579,7 +583,7 @@ mod test {
         let mut board = Board::decode("7;6E1;7E9;F4v;H4v;F6v;H6v;A7h;C7h;E7h").unwrap();
         board.pawns[0].position = Position { row: 2, col: 8 };
         let cache = NextMovesCache::new(&board, 0);
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let max_dist = board.dijkstra_distance_to_finish_1_wall_opponent_no_jumps(
             board.pawns[0],
             &cache.allowed_walls_for_pawn,
@@ -594,7 +598,7 @@ mod test {
         let mut board = Board::decode("9;5E1;6E9;G4v;H4v;A6h;G6v;H6v;A7v;B7h;D7h;F7h").unwrap();
         board.pawns[0].position = Position { row: 3, col: 7 };
         let cache = NextMovesCache::new(&board, 0);
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let max_dist = board.dijkstra_distance_to_finish_1_wall_opponent_no_jumps(
             board.pawns[0],
             &cache.allowed_walls_for_pawn,
@@ -610,7 +614,7 @@ mod test {
             Board::decode("11;4E1;5E9;G3v;H3v;G5v;H5v;A6h;A7v;B7h;D7h;F7h;G7v;H7v").unwrap();
         board.pawns[0].position = Position { row: 5, col: 7 };
         let cache = NextMovesCache::new(&board, 0);
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let max_dist = board.dijkstra_distance_to_finish_1_wall_opponent_no_jumps(
             board.pawns[0],
             &cache.allowed_walls_for_pawn,
@@ -626,7 +630,7 @@ mod test {
         let mut board = Board::decode("6;0G6;1E9;F4v;F6v;A7h;C7h;E7h;H7h").unwrap();
         board.pawns[0].position = Position { row: 5, col: 7 };
         let cache = NextMovesCache::new(&board, 0);
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let max_dist = board.dijkstra_distance_to_finish_1_wall_opponent_no_jumps(
             board.pawns[0],
             &cache.allowed_walls_for_pawn,
@@ -648,7 +652,7 @@ mod test {
         ];
         board.pawns[0].number_of_walls_left = 0;
         board.pawns[1].number_of_walls_left = 1;
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let max_dist = board.one_wall_roll_out(&cache);
 
@@ -664,7 +668,7 @@ mod test {
         board.pawns[1].number_of_walls_left = 1;
 
         board.turn = 0;
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let max_dist = board.one_wall_roll_out(&cache);
 
@@ -672,7 +676,7 @@ mod test {
         assert_eq!(max_dist, Some(-12.0));
 
         board.turn = 1;
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let max_dist = board.one_wall_roll_out(&cache);
 
@@ -691,7 +695,7 @@ mod test {
             NextMovesCache::new(&board, 0),
             NextMovesCache::new(&board, 1),
         ];
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         println!(
             "{}",
             board
@@ -727,7 +731,7 @@ mod test {
         board.pawns[1].position = Position { row: 7, col: 4 };
         board.pawns[1].number_of_walls_left = 0;
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         println!(
             "{:?}",
             board.winner_when_no_walls(&cache, (board.turn % 2) as i8, (0, 0))
@@ -852,7 +856,7 @@ mod test {
         let mut calc_cache = CalcCache::zero();
         let last_visit_count = Arc::new(AtomicU32::new(0));
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         recursive_monte_carlo(
             board.clone(),
             &mut mc_node,
@@ -886,7 +890,7 @@ mod test {
         let mut calc_cache = CalcCache::zero();
         let last_visit_count = Arc::new(AtomicU32::new(0));
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         recursive_monte_carlo(
             board.clone(),
             &mut mc_node,
@@ -938,7 +942,7 @@ mod test {
         let mut calc_cache = CalcCache::zero();
         let last_visit_count = Arc::new(AtomicU32::new(0));
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         recursive_monte_carlo(
             board.clone(),
             &mut mc_node,
@@ -973,7 +977,7 @@ mod test {
         let mut timings = Timings::default();
         let mut calc_cache = CalcCache::zero();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         recursive_monte_carlo(
             board.clone(),
             &mut mc_node,
@@ -1011,7 +1015,7 @@ mod test {
         let mut timings = Timings::default();
         let mut calc_cache = CalcCache::zero();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         recursive_monte_carlo(
             board.clone(),
             &mut mc_node,
@@ -1111,7 +1115,7 @@ mod test {
         let mut calc_cache = CalcCache::zero();
         let last_visit_count = Arc::new(AtomicU32::new(0));
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         recursive_monte_carlo(
             board.clone(),
             &mut mc_node,

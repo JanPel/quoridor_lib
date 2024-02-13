@@ -4,6 +4,10 @@ mod walls;
 use std::char::MAX;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use rand::prelude::SliceRandom;
 use rand::rngs::SmallRng;
@@ -2781,9 +2785,6 @@ impl Board {
                 next_move.1 = 3;
             }
         } else {
-            for next_move in next_moves.iter_mut() {
-                //next_move.1 = next_move.1.max(0);
-            }
             // We sort high value moves to the front
             next_moves.sort_by_key(|x| -x.1);
             //// only take the first 20 options.
@@ -3529,7 +3530,7 @@ mod test {
 
         let mut results = vec![];
         for (direction, location) in walls {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let allowed = board.place_wall(direction, location);
             results.push(allowed);
             println!(
@@ -3561,7 +3562,7 @@ mod test {
 
         let mut results = vec![];
         for (direction, location) in walls {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let allowed = board.place_wall(direction, location);
             results.push(allowed);
             println!(
@@ -3598,7 +3599,7 @@ mod test {
             NextMovesCache::new(&board, 1),
         ];
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let next_moves = board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &cache);
         println!(
             "next moves number: {:?}, took: {:?}",
@@ -3620,7 +3621,7 @@ mod test {
         ];
         let mut results = vec![];
         for (direction, location) in walls {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let allowed = board.place_wall(direction, location);
             results.push(allowed);
             println!(
@@ -3638,7 +3639,7 @@ mod test {
     fn test_walls_blocking_opponent() {
         let mut board = Board::new();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let walls_on_path = board
             .open_routes
             .shortest_path_from_dest_row_to_pawn(board.pawns[0]);
@@ -3646,7 +3647,7 @@ mod test {
         println!("walls on path {:?}", walls_on_path);
 
         let allowed_walls = board.allowed_walls();
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let walls_blocking_opponent =
             board.allowed_walls_blocking_only_opponents_path(0, &allowed_walls);
         println!("walls blocking opponent took: {:?}", start.elapsed());
@@ -3656,7 +3657,7 @@ mod test {
         board.game_move(Move::PawnMove(PawnMove::Down, None));
         board.game_move(Move::PawnMove(PawnMove::Up, None));
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let mut walls_blocking_opponent =
             board.allowed_walls_blocking_only_opponents_path(0, &allowed_walls);
         println!("walls blocking opponent took: {:?}", start.elapsed());
@@ -3793,7 +3794,7 @@ mod test {
             pawn.goal_row = 8;
             pawn.position = Position { row: 7, col: 5 };
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let distances_to_finish = board.distance_to_finish_line(0);
         assert_eq!(
@@ -3809,7 +3810,7 @@ mod test {
         );
         println!("relevant squares {:?}", start.elapsed());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         assert_eq!(
             board
                 .test_version_find_all_squares_relevant_for_pawn(0)
@@ -3840,7 +3841,7 @@ mod test {
             pawn.goal_row = 8;
             pawn.position = Position { row: 7, col: 5 };
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let distances_to_finish = board.distance_to_finish_line(0);
         assert_eq!(
             board
@@ -3855,7 +3856,7 @@ mod test {
         );
         println!("relevant squares {:?}", start.elapsed());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         println!(
             "{:?}",
             board
@@ -3872,7 +3873,7 @@ mod test {
 
         println!("--------------------- FAILING TEST");
         board.place_wall(WallDirection::Horizontal, Position { row: 0, col: 0 });
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let relevant_squares = board.test_version_find_all_squares_relevant_for_pawn(0);
         assert_eq!(relevant_squares.number_of_squares, 8 * 9 - 2);
         println!(
@@ -3906,7 +3907,7 @@ mod test {
             pawn.goal_row = 8;
             pawn.position = Position { row: 7, col: 5 };
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let distances_to_finish = board.distance_to_finish_line(0);
         assert_eq!(
@@ -3922,7 +3923,7 @@ mod test {
         );
         println!("relevant squares {:?}", start.elapsed());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         assert_eq!(
             board
                 .test_version_find_all_squares_relevant_for_pawn(0)
@@ -3951,7 +3952,7 @@ mod test {
             pawn.goal_row = 0;
             pawn.position = Position { row: 8, col: 4 };
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let distances_to_finish = board.distance_to_finish_line(1);
         assert_eq!(
             board
@@ -3968,7 +3969,7 @@ mod test {
 
         println!("{:?}", board.encode());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let rel_squares = board.test_version_find_all_squares_relevant_for_pawn(1);
         println!("relevant squares with excluding {:?}", start.elapsed());
         rel_squares.pretty_print();
@@ -3995,7 +3996,7 @@ mod test {
             pawn.position = Position { row: 3, col: 8 };
         }
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let distances_to_finish = board.distance_to_finish_line(1);
         assert_eq!(
             board
@@ -4014,7 +4015,7 @@ mod test {
             board.encode()
         );
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let rel_squares = board.test_version_find_all_squares_relevant_for_pawn(1);
         println!(
             "relevant squares with excluding {:?} for board: {}",
@@ -4095,7 +4096,7 @@ mod test {
             pawn.goal_row = 8;
             pawn.position = Position { row: 7, col: 4 };
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let distances_to_finish = board.distance_to_finish_line(0);
         assert_eq!(
             board
@@ -4112,7 +4113,7 @@ mod test {
         let rel_squares = board.test_version_find_all_squares_relevant_for_pawn(0);
         rel_squares.pretty_print();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         println!("{}", board.encode());
         assert_eq!(
             board
@@ -4428,7 +4429,7 @@ mod test {
             NextMovesCache::new(&board, 1),
         ];
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let pot_block_off = board.open_routes.test_check_lines(
             board.pawns[0],
             &cache_new[0].relevant_squares,
@@ -4512,7 +4513,7 @@ mod test {
             NextMovesCache::new(&board, 1),
         ];
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let pot_block_off = board.open_routes.test_check_lines(
             board.pawns[1],
             &cache_new[1].relevant_squares,
@@ -4606,7 +4607,7 @@ mod test {
     fn test_relevant_squares_end() {
         let mut board = Board::decode("66;1B2;0A6;B1h;A2v;B3v;D3h;F3h;H3h;A4v;D4v;B5v;D5h;F5v;G5h;D6v;E6h;G6v;H6h;B7v;C8h;D8v").unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let distances_to_finish =
             board.distance_to_finish_line(1).dist[board.pawns[1].position].unwrap();
         let cache = NextMovesCache::new(&board, 1);
@@ -4629,11 +4630,11 @@ mod test {
             "41;2G7;1B3;A1h;C1v;D2h;F2h;H2h;C3v;B4h;D4v;B5h;D5h;G5h;C6v;D6h;H6h;A7h;C7h;E7h",
         )
         .unwrap();
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let cache = NextMovesCache::new(&board, 0);
         println!("whole cache calc took: {:?}", start.elapsed());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let new_cache = old_cache.next_cache(
             Move::PawnMove(PawnMove::Right, None),
             &prev_board,
@@ -4643,7 +4644,7 @@ mod test {
         println!("Using old cache took: {:?}", start.elapsed());
 
         // Number of squares should be 12, not 32....
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let rel_squares = board.test_version_find_all_squares_relevant_for_pawn(0);
         println!("cache calc took: {:?}", start.elapsed());
         assert_eq!(rel_squares.number_of_squares, 12);
@@ -4663,7 +4664,7 @@ mod test {
         )
         .unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let cache = NextMovesCache::new(&board, 0);
 
         let next_board = Board::decode(
@@ -4671,7 +4672,7 @@ mod test {
         )
         .unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let prev_cache = cache.next_cache(
             Move::PawnMove(PawnMove::Right, None),
             &board,
@@ -4692,7 +4693,7 @@ mod test {
         )
         .unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let cache = NextMovesCache::new(&board, 0);
         println!("from scratchtook: {:?}", start.elapsed());
 
@@ -4701,7 +4702,7 @@ mod test {
         )
         .unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let prev_cache = cache.next_cache(
             Move::PawnMove(PawnMove::Left, Some(PawnMove::Left)),
             &board,
@@ -4710,7 +4711,7 @@ mod test {
         );
         println!("from cache took: {:?}", start.elapsed());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let next_cache = NextMovesCache::new(&next_board, 0);
         println!("from scratchtook: {:?}", start.elapsed());
 
@@ -4723,19 +4724,19 @@ mod test {
     fn test_wall_error() {
         let board = Board::decode("10;5E4;5E6;D1v;D2h;C3v;D3h;E5v").unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let cache = NextMovesCache::new(&board, 0);
         println!("from scratchtook: {:?}", start.elapsed());
 
         let next_board = Board::decode("11;4E4;5E6;D1v;D2h;C3v;D3h;E5v;D6h").unwrap();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let game_move = Move::Wall(WallDirection::Horizontal, Position { row: 5, col: 3 });
         let prev_cache = cache.next_cache(game_move, &board, &next_board, 0);
         println!("from cache took: {:?}", start.elapsed());
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let next_cache = NextMovesCache::new(&next_board, 0);
         println!("from scratchtook: {:?}", start.elapsed());
 

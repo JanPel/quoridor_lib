@@ -341,6 +341,44 @@ impl PreCalc {
         boards.sort_by_key(|x| x.turn);
         boards.pop()
     }
+
+    // Here we return all the boards that haven't been precalculated yet at the deepest depth.
+    pub fn get_next_to_calc_at_same_depth(&self) -> Option<Vec<Board>> {
+        let mut boards = vec![];
+        for (key, value) in &self.scores_player_zero {
+            if value.is_none() {
+                boards.push(Board::decode(key).unwrap());
+            }
+        }
+        boards.sort_by_key(|x| x.turn);
+        let max_turn = boards.iter().map(|x| x.turn).max()?;
+        Some(boards.into_iter().filter(|x| x.turn == max_turn).collect())
+    }
+
+    pub fn get_unknown_without_unknown_children(&self) -> Option<Vec<Board>> {
+        let mut boards = vec![];
+        'outer: for (key, value) in &self.scores_player_zero {
+            if value.is_some() {
+                continue;
+            }
+            let board = Board::decode(key).unwrap();
+            for legal_move in board.next_non_mirrored_moves() {
+                let mut next_board = board.clone();
+                next_board.game_move(legal_move);
+                let entry = self.scores_player_zero.get(&next_board.encode());
+                if entry.is_some() && entry.unwrap().is_none() {
+                    // has unknown to precalc child
+                    continue 'outer;
+                }
+            }
+            boards.push(board)
+        }
+        if boards.len() >= 1 {
+            Some(boards)
+        } else {
+            None
+        }
+    }
 }
 
 // We want to implement From<MoveStats> for PreCalc

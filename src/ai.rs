@@ -1,11 +1,14 @@
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
-use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use crate::board::*;
 use crate::move_stats::{self, MoveStats, PreCalc};
@@ -131,7 +134,7 @@ pub struct MonteCarloTreeSerialize<'a> {
 
 impl<'a> From<&'a MonteCarloTree> for MonteCarloTreeSerialize<'a> {
     fn from(mc_tree: &'a MonteCarloTree) -> Self {
-        let last_visit_count = mc_tree.last_visit_count.load(Ordering::Relaxed);
+        let last_visit_count = mc_tree.last_visit_count.load(Ordering::Acquire);
         Self {
             cache_id: mc_tree.cache.inner.lock().unwrap().new_cache_index,
             mc_node: &mc_tree.mc_node,
@@ -175,7 +178,7 @@ impl MonteCarloTree {
         }
     }
 
-    fn serialize_to_file(&self, file_name: &str) {
+    pub fn serialize_to_file(&self, file_name: &str) {
         let mut file = std::fs::File::create(file_name).unwrap();
         let mut buffer = Vec::new();
         let mc_tree = MonteCarloTreeSerialize::from(self.clone());
@@ -187,10 +190,14 @@ impl MonteCarloTree {
         file.write_all(&buffer).unwrap();
     }
 
-    fn deserialize(file_name: &str) -> Self {
+    fn deserialize_file(file_name: &str) -> Self {
         let mut file = std::fs::File::open(file_name).unwrap();
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).unwrap();
+        Self::deserialize(&buffer)
+    }
+
+    pub fn deserialize(buffer: &[u8]) -> Self {
         let deserial_tree: MonteCarloTreeDeserialize = bincode::deserialize(&buffer).unwrap();
         deserial_tree.into()
     }
@@ -240,7 +247,7 @@ impl MonteCarloTree {
         score_deeper
     }
 
-    fn score_for_zero(&mut self, board: &Board, pre_calc: &PreCalc) -> f32 {
+    pub fn score_for_zero(&mut self, board: &Board, pre_calc: &PreCalc) -> f32 {
         let scores = self.mc_node.scores();
         let mut score_current_player = 1.0 - scores.0 / scores.1 as f32;
         println!("SCORE CURRENT PLAYER: {:?}", score_current_player);
@@ -257,6 +264,65 @@ impl MonteCarloTree {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn decide_move(
+        &mut self,
+        board: Board,
+        mut number_of_simulations: u32,
+        wall_value: fn(u8) -> f32,
+        explore_constant: f32,
+        new_logic: bool,
+        roll_out_new: bool,
+        number_of_averages: u32,
+        pre_calc: &PreCalc,
+    ) -> Result<(Move, (f32, u32)), Box<dyn std::error::Error + Sync + Send>> {
+        number_of_simulations = number_of_simulations.min(3_500_000_000);
+
+        if number_of_simulations >= 1 {
+            let mut small_rng = SmallRng::from_entropy();
+            let mut timings = Timings::default();
+            let start = Instant::now();
+            let res = recursive_monte_carlo(
+                board.clone(),
+                &mut self.mc_node,
+                &mut small_rng,
+                number_of_simulations,
+                0,
+                wall_value,
+                explore_constant,
+                new_logic,
+                &mut timings,
+                None,
+                roll_out_new,
+                number_of_averages,
+                &mut self.cache,
+                &self.last_visit_count.clone(),
+                &pre_calc,
+            );
+            log::info!("Deciding On move took: {:?}", start.elapsed());
+        }
+        //println!("{:?}", timings);
+        let move_options = self
+            .mc_node
+            .move_options()
+            .ok_or("Need to enough simulations to expand root leaf")?;
+        move_options.sort_by_key(|x| x.1.number_visits());
+        let best_move =
+            select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
+        if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
+            log::info!("best precalc alernativie is {:?}", precalc_option);
+            if precalc_option.1 > best_move.1 .0 / best_move.1 .1 as f32 {
+                log::info!("best precalc alernativie better");
+                return Ok((
+                    precalc_option.0,
+                    (precalc_option.1 * 250_000_000.0, 250_000_000),
+                ));
+            }
+        }
+        Ok(best_move)
+    }
+    // We only want to include this function with non wasm
+    #[cfg(not(target_arch = "wasm32"))]
     fn decide_move(
         &mut self,
         board: Board,
@@ -282,11 +348,11 @@ impl MonteCarloTree {
         if number_of_simulations >= 1 {
             let mut small_rng = SmallRng::from_entropy();
             let mut timings = Timings::default();
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let res = multithreaded_mc(
                 board.clone(),
                 &mut self.mc_node,
-                4,
+                10,
                 number_of_simulations,
                 &mut small_rng,
                 0,
@@ -301,7 +367,7 @@ impl MonteCarloTree {
                 &pre_calc,
             );
             if res.last_visit_count >= 10_000_000 {
-                let start = std::time::Instant::now();
+                let start = Instant::now();
 
                 println!("Pruning nodes, took {:?}", start.elapsed());
             }
@@ -421,6 +487,7 @@ impl MCNode {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn multithreaded_mc(
     board: Board,
     mc_ref: &mut MCNode,
@@ -559,6 +626,7 @@ fn multithreaded_mc(
     total_res
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn split_up_move_options(
     move_options: &mut [(Move, MCNode, i8)],
     mut number_of_threads: u32,
@@ -667,6 +735,7 @@ fn split_up_move_options(
     (result, best_move_split)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn monte_carlo_moves(
     board: Board,
     number_of_loops: u32,
@@ -801,7 +870,7 @@ pub fn recursive_monte_carlo(
         }
         match mc_ref {
             MCNode::Leaf => {
-                //let start = std::time::Instant::now();
+                //let start = Instant::now();
                 //let next_cache = [
                 //    NextMovesCache::new(&board, 0),
                 //    NextMovesCache::new(&board, 1),
@@ -881,7 +950,7 @@ pub fn recursive_monte_carlo(
                         to_return.game_count += 1;
                         to_return.score_zero += roll_out_result;
                         to_return.last_visit_count =
-                            last_visit_count.fetch_add(1, Ordering::Relaxed);
+                            last_visit_count.fetch_add(1, Ordering::AcqRel);
                         let board_score = if board.turn % 2 != 0 {
                             to_return.score_zero
                         } else {
@@ -894,7 +963,6 @@ pub fn recursive_monte_carlo(
                         continue;
                     }
                 }
-                let start = std::time::Instant::now();
                 let (roll_out_score, game_finish_leave) = board.roll_out(
                     small_rng,
                     wall_value,
@@ -903,10 +971,9 @@ pub fn recursive_monte_carlo(
                     number_of_averages,
                 );
                 //board.roll_out_two_steps_greedy(small_rng)
-                timings.roll_out_time += start.elapsed();
                 to_return.game_count += 1;
                 to_return.score_zero += roll_out_score;
-                to_return.last_visit_count = last_visit_count.fetch_add(1, Ordering::Relaxed);
+                to_return.last_visit_count = last_visit_count.fetch_add(1, Ordering::AcqRel);
                 // This is wrong, now it will keep picking losing moves.
                 let board_score = if board.turn % 2 != 0 {
                     to_return.score_zero
@@ -937,7 +1004,7 @@ pub fn recursive_monte_carlo(
                 scores.1 += multiplier;
                 to_return.score_zero += result * multiplier as f32;
                 to_return.game_count += multiplier;
-                to_return.last_visit_count = last_visit_count.fetch_add(1, Ordering::Relaxed);
+                to_return.last_visit_count = last_visit_count.fetch_add(1, Ordering::AcqRel);
             }
             MCNode::Branch {
                 move_options,
@@ -962,20 +1029,24 @@ pub fn recursive_monte_carlo(
                 }
                 // If we haven't filled move options yet, we will do so first (this is an optimization)
                 if move_options.is_none() {
-                    let start = std::time::Instant::now();
                     let (next_moves_cache, new_cache_index) =
                         calc_cache.get_cache(&board, *cache_index);
                     *cache_index = new_cache_index;
                     let mut next_moves: Vec<(Move, MCNode, i8)> = board
                         .next_moves_with_scoring(true, small_rng, &next_moves_cache)
                         .into_iter()
-                        .filter(|x| x.1 >= 0)
                         .map(|x| (x.0, MCNode::Leaf, x.1))
                         .collect();
-                    // To make sure we don't waste space.
+                    if next_moves.len() == 0 {
+                        panic!("No next moves for board {}", board.encode());
+                    }
+                    let number_of_positive_scores = next_moves.iter().map(|x| x.2 >= 0).count();
+                    if number_of_positive_scores >= 1 {
+                        next_moves = next_moves.into_iter().filter(|x| x.2 >= 0).collect();
+                        // To make sure we don't waste space.
+                    }
                     next_moves.shrink_to_fit();
                     *move_options = Some(Box::new(next_moves));
-                    timings.move_option_time += start.elapsed();
                 }
                 // If we have visited a node 10_000 times, we want to include all other options to consider
                 if scores.1 >= 10_000 && *scores_included == 0 {
@@ -1018,14 +1089,12 @@ pub fn recursive_monte_carlo(
                         //next_board.encode(),
                         //chosen_move
                         //);
-                        let start = std::time::Instant::now();
                         let (cache, new_cache_index) = calc_cache.get_cache(&board, *cache_index);
                         *cache_index = new_cache_index;
                         let res = [
                             cache[0].next_cache(*chosen_move, &board, &next_board, 0),
                             cache[1].next_cache(*chosen_move, &board, &next_board, 1),
                         ];
-                        timings.cache_calc_time += start.elapsed();
                         timings.cache_hit_count += 1;
                         Some(res)
                     } else {
@@ -1085,16 +1154,8 @@ impl AIControlledBoard {
     pub fn decode(encoded: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let board = Board::decode(encoded)?;
 
-        let mut relevant_mc_tree = MonteCarloTree::new();
+        let relevant_mc_tree = MonteCarloTree::new();
 
-        // we only do this if target isn't wasm
-        if cfg!(not(target_arch = "wasm32")) {
-            // if in the folder precalc we have the board, we want to load the precalculated data into the MontecarloTree
-            let board_path = format!("{}/{}.mc_node", PRECALC_FOLDER, encoded);
-            if std::path::Path::new(&board_path).exists() {
-                relevant_mc_tree = MonteCarloTree::deserialize(&board_path);
-            }
-        }
         Ok(Self {
             board,
             ai_pawn_index: 0,
@@ -1110,7 +1171,6 @@ impl AIControlledBoard {
     }
 
     pub fn game_move(&mut self, game_move: Move) -> (MoveResult, u32) {
-        let old_board = self.board.clone();
         let move_result = self.board.game_move(game_move);
         if move_result == MoveResult::Invalid {
             return (move_result, 0);
@@ -1157,11 +1217,15 @@ impl AIControlledBoard {
             self.relevant_mc_tree = MonteCarloTree::new();
         }
         // if in the folder precalc we have the board, we want to load the precalculated data into the MontecarloTree
-        let board_path = format!("{}/{}.mc_node", PRECALC_FOLDER, encoded);
-        if std::path::Path::new(&board_path).exists() {
-            self.relevant_mc_tree = MonteCarloTree::deserialize(&board_path);
-            number_of_simulations = self.relevant_mc_tree.mc_node.number_visits();
+        if cfg!(not(target_arch = "wasm32")) {
+            // if in the folder precalc we have the board, we want to load the precalculated data into the MontecarloTree
+            let board_path = format!("{}/{}.mc_node", PRECALC_FOLDER, encoded);
+            if std::path::Path::new(&board_path).exists() {
+                self.relevant_mc_tree = MonteCarloTree::deserialize_file(&board_path);
+                number_of_simulations = self.relevant_mc_tree.mc_node.number_visits();
+            }
         }
+
         (move_result, number_of_simulations)
     }
 
@@ -1183,7 +1247,7 @@ impl AIControlledBoard {
                 pre_calc,
             )
             .unwrap();
-        println!(
+        log::info!(
             "AI move estimates {:?}, so win rate is {:.1}%",
             (ai_move.0, ai_move.1),
             ai_move.1 .0 as f32 / ai_move.1 .1 as f32 * 100.0
@@ -1604,7 +1668,7 @@ mod tests {
         println!("MCNode size is: {}", std::mem::size_of::<MCNode>());
         println!("Board size is: {}", std::mem::size_of::<Board>());
         println!("Board size is: {}", std::mem::size_of::<MinimalBoard>());
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let pre_calc = PreCalc::new();
         let chosen_move = board.relevant_mc_tree.decide_move(
             board.board.clone(),
@@ -1668,7 +1732,7 @@ mod tests {
         let mut made_moves = vec![];
         loop {
             let players_turn = player_params[board.board.turn % 2];
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let wall_value = if let Some(_wall_multiplier) = players_turn.1 {
                 // TODO: this is wrong
                 |x| x as f32 * 2.0
@@ -2076,183 +2140,4 @@ mod tests {
     }
 
     use sysinfo::{Process, System};
-
-    fn get_current_process_vms() -> f64 {
-        let mut system = System::new_all();
-        system.refresh_all();
-
-        let maximum_bytes = 16_000_000_000.0;
-        if let Some(process) = system.process(sysinfo::get_current_pid().unwrap()) {
-            process.memory() as f64 / maximum_bytes
-        } else {
-            0.0
-        }
-    }
-
-    fn remove_known_moves_for_precalc(mc_ref: &mut MCNode, current_board: &Board) {
-        let mut pre_calc = PreCalc::open(PRECALC_FILE);
-        mc_ref.move_options().unwrap().retain(|game_move| {
-            let mut next_board = current_board.clone();
-            next_board.game_move(game_move.0);
-            pre_calc.roll_out_score(&next_board).is_none()
-        })
-    }
-
-    fn score_from_deeper_precalc(board: &Board, mc_ref: &mut MCNode) -> Option<f32> {
-        let mut pre_calc = PreCalc::open(PRECALC_FILE);
-        let mut score_deeper = None;
-        for game_move in mc_ref.move_options().unwrap() {
-            let mut next_board = board.clone();
-            next_board.game_move(game_move.0);
-            if let Some(score_precalc) = pre_calc.roll_out_score(&next_board) {
-                let score_for_current_player = if board.turn % 2 != 0 {
-                    score_precalc
-                } else {
-                    1.0 - score_precalc
-                };
-
-                if let Some(score_deeper) = &mut score_deeper {
-                    if score_for_current_player > *score_deeper {
-                        *score_deeper = score_for_current_player;
-                    }
-                } else {
-                    score_deeper = Some(score_for_current_player);
-                }
-                // we want to remove it from the list
-            }
-        }
-        score_deeper
-    }
-
-    fn score_for_zero(board: &Board, mc_ref: &mut MCNode) -> f32 {
-        let scores = mc_ref.scores();
-        println!("scores are: {:?}", scores);
-        let mut score_current_player = 1.0 - scores.0 / scores.1 as f32;
-        if let Some(score_deeper) = score_from_deeper_precalc(board, mc_ref) {
-            if score_deeper > score_current_player {
-                score_current_player = score_deeper;
-            }
-        }
-        // Bit less fragile then using best move
-        if board.turn % 2 == 0 {
-            score_current_player
-        } else {
-            1.0 - score_current_player
-        }
-    }
-
-    #[test]
-    fn test_serializing_monte_carlo_tree() {
-        let board_codes = [
-            //"11;8E5;8E6;D3h;D7h;F7h;D4h",
-            //"8;9E4;9E6;C3h;D4v",
-            "9;9E5;9E6;D3h;D7h",
-            "9;8E4;9E6;D3h;C6h;E6v",
-            "9;8E4;9E6;D3h;C6h;D5v",
-            "9;8E4;9E6;D3h;C6h;F3h",
-            "6;10E4;9E7;D4v",
-            "7;9E4;10E6;A3h",
-            "8;9E4;9E6;A3h;C7h",
-            // Mirror board, insert
-            "10;8E4;8E6;D3h;F3h;C6h;E6h",
-        ];
-        let mut to_calc = PreCalc::open(PRECALC_FILE);
-        while let Some(board) = to_calc.next_to_calc() {
-            println!("PRECALCULATING BOARD: {}", board.encode());
-            //let board_code = "6;10E4;10E6";
-            let mut board = AIControlledBoard::from_board(board);
-            //let relevant_mc_tree =
-            //    MonteCarloTree::deserialize("14;7E5;7D6;D3h;B4h;D4h;D5v;D7h;F7h.mc_node");
-            let simulations_per_step = 40_000;
-            let mut total_simulations = simulations_per_step;
-            //match &relevant_mc_tree.mc_node {
-            //    MCNode::Branch { scores, .. } => {
-            //        total_simulations = scores.1 + simulations_per_step;
-            //    }
-            //    _ => (),
-            //}
-            //board.relevant_mc_tree = relevant_mc_tree;
-            let mut i = 1;
-
-            for _ in 0..(251 * 25) {
-                // After all legal moves for step one have been expanded.
-                if i == 3 {
-                    println!(
-                        "REMOVING KNOWN MOVES: OLD MOVES AMOUNT IS: {}",
-                        board.relevant_mc_tree.mc_node.move_options().unwrap().len()
-                    );
-                    remove_known_moves_for_precalc(
-                        &mut board.relevant_mc_tree.mc_node,
-                        &board.board,
-                    );
-                    println!(
-                        "REMOVING KNOWN MOVES: NEW MOVES AMOUNT IS: {}",
-                        board.relevant_mc_tree.mc_node.move_options().unwrap().len()
-                    );
-                }
-                let _chosen_move = board.ai_move(total_simulations, &to_calc);
-                total_simulations += simulations_per_step;
-                println!(
-                    "--------------------- USING {:.4} % BYTES",
-                    get_current_process_vms() * 100.0
-                );
-                if get_current_process_vms() > 0.91 {
-                    println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");
-                    break;
-                }
-                // Every Million steps we prune
-                if i % 25 == 0 {
-                    let start = std::time::Instant::now();
-                    let visit_count = board
-                        .relevant_mc_tree
-                        .last_visit_count
-                        .fetch_add(0, Ordering::Relaxed);
-                    let prune_amount = if get_current_process_vms() > 0.85 {
-                        2_000_000
-                    } else if get_current_process_vms() > 0.7 {
-                        4_000_000
-                    } else {
-                        8_000_000
-                    };
-                    if visit_count >= 10_000_000 {
-                        prune_nodes(
-                            &mut board.relevant_mc_tree.mc_node,
-                            visit_count - prune_amount,
-                            false,
-                        );
-                    }
-                    println!("Time to prune TREE is: {:?}", start.elapsed());
-                }
-                i += 1;
-            }
-
-            prune_nodes(
-                &mut board.relevant_mc_tree.mc_node,
-                board
-                    .relevant_mc_tree
-                    .last_visit_count
-                    .fetch_add(0, Ordering::Relaxed),
-                true,
-            );
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            // Here we sleep for a bit, to let the process reclaim its memory.
-
-            // submoves we are checking
-            board.relevant_mc_tree.serialize_to_file(&format!(
-                "{}/{}.mc_node",
-                PRECALC_FOLDER,
-                board.board.encode()
-            ));
-            //let best_move = select_robust_best_branch(
-            //    board.relevant_mc_tree.mc_node.move_options().unwrap(),
-            //    &board.board,
-            //)
-            //.unwrap();
-            let win_rate_zero = board
-                .relevant_mc_tree
-                .score_for_zero(&board.board, &to_calc);
-            to_calc.insert_result(&board.board, win_rate_zero);
-            to_calc.store(PRECALC_FILE);
-        }
-    }
 }

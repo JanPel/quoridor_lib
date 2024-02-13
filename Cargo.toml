@@ -18,6 +18,9 @@ tokio = "1"
 sysinfo = "0.30"
 getrandom = { version = "0.2", features = ["js"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time= "1"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
