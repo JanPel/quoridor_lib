@@ -2670,8 +2670,10 @@ impl Board {
 
         // In case the opponent has no walls left, walk shortest path.
         if self.pawns[(self.turn + 1) % 2].number_of_walls_left == 0 {
+            // Might be multiple shortest paths, then we want to be able to choose
             next_moves.sort_by_key(|x| -x.1);
-            next_moves = next_moves[0..1].to_vec();
+            let best_score = next_moves[0].1;
+            next_moves.retain(|x| x.1 == best_score);
         }
         // In case no walls left, we can only do pawn moves.
         if self.pawns[self.turn % 2].number_of_walls_left == 0 {
