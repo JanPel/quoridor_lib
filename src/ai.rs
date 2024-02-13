@@ -1,3 +1,4 @@
+use core::num;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -812,34 +813,6 @@ impl MonteCarloResponse {
     }
 }
 
-// We want to prune all nodes older then last_visit_cutoff, which means that for MCNodes of the type Branch, if last_visit_count is small then last_visit_cutoff,
-// we want to set next_moves to vec![]
-pub fn prune_nodes(mc_node: &mut MCNode, last_visit_cutoff: u32, final_prune: bool) {
-    match mc_node {
-        MCNode::Branch {
-            move_options,
-            last_visited,
-            scores_included,
-            scores,
-            ..
-        } => {
-            if (*last_visited < last_visit_cutoff && scores.1 <= 50_000)
-                || (final_prune && scores.1 <= 1_000)
-            {
-                *move_options = None;
-                *scores_included = 0;
-            } else {
-                if let Some(move_options) = move_options.as_mut() {
-                    for (_, node, _) in move_options.iter_mut() {
-                        prune_nodes(node, last_visit_cutoff, final_prune);
-                    }
-                }
-            }
-        }
-        _ => (),
-    }
-}
-
 pub fn recursive_monte_carlo(
     board: Board,
     mc_ref: &mut MCNode,
@@ -1037,6 +1010,8 @@ pub fn recursive_monte_carlo(
                         .into_iter()
                         .map(|x| (x.0, MCNode::Leaf, x.1))
                         .collect();
+
+                    // This is just a sanity check for some bugs we are seeing, can be removed later on again.
                     if next_moves.len() == 0 {
                         panic!("No next moves for board {}", board.encode());
                     }
@@ -1061,6 +1036,10 @@ pub fn recursive_monte_carlo(
                         .unwrap()
                         .extend(next_moves.iter().map(|x| (x.0, MCNode::Leaf, x.1)));
                     move_options.as_mut().map(|x| x.shrink_to_fit());
+                    // This is just a sanity check for some bugs we are seeing, can be removed later on again.
+                    if move_options.as_ref().map_or(0, |x| x.len()) == 0 {
+                        panic!("No next moves for board {}", board.encode());
+                    }
 
                     *scores_included = -1;
                 }
@@ -1068,12 +1047,19 @@ pub fn recursive_monte_carlo(
                 let result = {
                     // If there are leaves, we select one, run through it and continue.
                     // If there are no leaves, we select the most promising branch.
+                    let number_move_options = move_options.as_ref().map_or(0, |x| x.len());
                     let (chosen_move, node, moves_allowed, played_out_node) = select_next_node(
                         move_options.as_mut().unwrap(),
                         scores.1,
                         explore_constant,
                     )
-                    .expect("Next moves is empty");
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Next moves is empty for board {}, move options len is {}",
+                            board.encode(),
+                            number_move_options
+                        )
+                    });
                     if let Some(played_out_score) = played_out_node {
                         played_out = Some(played_out_score);
                         continue;
