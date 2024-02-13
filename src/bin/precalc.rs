@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
 use sysinfo::{Process, System};
 
 use quoridor::*;
@@ -54,20 +56,38 @@ fn get_current_process_vms() -> f64 {
     }
 }
 
+// After running lots of precalcs for known moves from quoridor games online, Now we want to expand some nodes that are not too deep in the game and where we could end up.
+// We will do this seperately for black and white.
+
+fn find_next_board_sequence(ai_player: usize) -> Vec<Board> {
+    // For the ai player we take the step that the monte carlo algorithm would take online.
+    let mut board_sequence = vec![];
+    let precalc_file: &str =
+        &"../quoridor/split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h/to_precalc.json";
+    let precalc = PreCalc::load(precalc_file).unwrap();
+    let mut ai_controlled_board = AIControlledBoard::decode("8;9E4;9E6;D3h;D7h").unwrap();
+
+    board_sequence.push(ai_controlled_board.board.clone());
+    while precalc
+        .roll_out_score(board_sequence.last().unwrap())
+        .is_some()
+    {
+        if ai_controlled_board.board.turn % 2 == ai_player {
+            let ai_move = ai_controlled_board.ai_move(0, &precalc);
+            ai_controlled_board.game_move(ai_move.0);
+        } else {
+            // The non ai player takes a random move among the best moves. (for now we say moves that are in the top 10 visit wise
+            // and have a win rate that is at most 5% point below the best win rate)
+            let ai_move =
+                ai_controlled_board.random_good_move(&mut SmallRng::from_entropy(), &precalc);
+            ai_controlled_board.game_move(ai_move);
+        }
+        board_sequence.push(ai_controlled_board.board.clone());
+    }
+    board_sequence
+}
+
 fn main() {
-    let board_codes = [
-        //"11;8E5;8E6;D3h;D7h;F7h;D4h",
-        //"8;9E4;9E6;C3h;D4v",
-        "9;9E5;9E6;D3h;D7h",
-        "9;8E4;9E6;D3h;C6h;E6v",
-        "9;8E4;9E6;D3h;C6h;D5v",
-        "9;8E4;9E6;D3h;C6h;F3h",
-        "6;10E4;9E7;D4v",
-        "7;9E4;10E6;A3h",
-        "8;9E4;9E6;A3h;C7h",
-        // Mirror board, insert
-        "10;8E4;8E6;D3h;F3h;C6h;E6h",
-    ];
     let mut to_calc = PreCalc::open(PRECALC_FILE);
     while let Some(boards) = to_calc.get_unknown_without_unknown_children() {
         let mut inserts = vec![];
@@ -181,5 +201,25 @@ fn main() {
             to_calc.insert_result(&board, result)
         }
         to_calc.store(PRECALC_FILE);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_next_board_sequence() {
+        // FOR PLAYER 0
+        let board_sequence = find_next_board_sequence(0);
+        for board in board_sequence {
+            println!("{}", board.encode());
+        }
+
+        // FOR PLAYER 1
+        let board_sequence = find_next_board_sequence(1);
+        for board in board_sequence {
+            println!("{}", board.encode());
+        }
     }
 }

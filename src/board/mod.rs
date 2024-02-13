@@ -2659,9 +2659,9 @@ impl Board {
                 score,
             ));
         }
-        if next_moves.iter().any(|x| x.1 != -100) {
+        if next_moves.iter().any(|x| x.1 >= 0) {
             // Now we want to remove everything that does have -100 as a score.
-            next_moves.retain(|x| x.1 != -100);
+            next_moves.retain(|x| x.1 >= 0);
         } else {
             for next_move in next_moves.iter_mut() {
                 next_move.1 = 0;

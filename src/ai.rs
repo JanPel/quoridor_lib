@@ -1,4 +1,5 @@
 use core::num;
+use rand::prelude::IteratorRandom;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use crate::move_stats::{self, MoveStats, PreCalc};
 const VISIT_LIMIT: u32 = 3_500_000_000;
 
 const PRECALC_FILE: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:c6h/to_precalc.json";
-const PRECALC_FOLDER: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:c6h/precalc";
+const PRECALC_FOLDER: &str = "../quoridor/split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h/precalc";
 
 // This is the struct we will use to cache moves, the values are the best move from that board, and how strong the that calculated it was.
 pub struct AIControlledBoard {
@@ -215,12 +216,8 @@ impl MonteCarloTree {
         }
     }
 
-    fn score_from_deeper_precalc(
-        &mut self,
-        board: &Board,
-        pre_calc: &PreCalc,
-    ) -> Option<(Move, f32)> {
-        let mut score_deeper: Option<(Move, f32)> = None;
+    pub fn deeper_known_moves(&self, board: &Board, pre_calc: &PreCalc) -> Vec<(Move, f32)> {
+        let mut known_moves = vec![];
         for game_move in board.next_non_mirrored_moves() {
             let mut next_board = board.clone();
             next_board.game_move(game_move);
@@ -230,19 +227,25 @@ impl MonteCarloTree {
                 } else {
                     1.0 - score_precalc
                 };
-                println!(
-                    "move: {:?}, score for current player: {:?}",
-                    game_move, score_for_current_player
-                );
+                known_moves.push((game_move, score_for_current_player));
+            }
+        }
+        known_moves
+    }
 
-                if let Some(score_deeper) = &mut score_deeper {
-                    if score_for_current_player > score_deeper.1 {
-                        *score_deeper = (game_move, score_for_current_player);
-                    }
-                } else {
-                    score_deeper = Some((game_move, score_for_current_player));
+    fn score_from_deeper_precalc(
+        &mut self,
+        board: &Board,
+        pre_calc: &PreCalc,
+    ) -> Option<(Move, f32)> {
+        let mut score_deeper: Option<(Move, f32)> = None;
+        for (game_move, score_for_current_player) in self.deeper_known_moves(board, pre_calc) {
+            if let Some(score_deeper) = &mut score_deeper {
+                if score_for_current_player > score_deeper.1 {
+                    *score_deeper = (game_move, score_for_current_player);
                 }
-                // we want to remove it from the list
+            } else {
+                score_deeper = Some((game_move, score_for_current_player));
             }
         }
         score_deeper
@@ -1015,7 +1018,7 @@ pub fn recursive_monte_carlo(
                     if next_moves.len() == 0 {
                         panic!("No next moves for board {}", board.encode());
                     }
-                    let number_of_positive_scores = next_moves.iter().map(|x| x.2 >= 0).count();
+                    let number_of_positive_scores = next_moves.iter().filter(|x| x.2 >= 0).count();
                     if number_of_positive_scores >= 1 {
                         next_moves = next_moves.into_iter().filter(|x| x.2 >= 0).collect();
                         // To make sure we don't waste space.
@@ -1036,6 +1039,7 @@ pub fn recursive_monte_carlo(
                         .unwrap()
                         .extend(next_moves.iter().map(|x| (x.0, MCNode::Leaf, x.1)));
                     move_options.as_mut().map(|x| x.shrink_to_fit());
+
                     // This is just a sanity check for some bugs we are seeing, can be removed later on again.
                     if move_options.as_ref().map_or(0, |x| x.len()) == 0 {
                         panic!("No next moves for board {}", board.encode());
@@ -1140,7 +1144,14 @@ impl AIControlledBoard {
     pub fn decode(encoded: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let board = Board::decode(encoded)?;
 
-        let relevant_mc_tree = MonteCarloTree::new();
+        let mut relevant_mc_tree = MonteCarloTree::new();
+        if cfg!(not(target_arch = "wasm32")) {
+            // if in the folder precalc we have the board, we want to load the precalculated data into the MontecarloTree
+            let board_path = format!("{}/{}.mc_node", PRECALC_FOLDER, encoded);
+            if std::path::Path::new(&board_path).exists() {
+                relevant_mc_tree = MonteCarloTree::deserialize_file(&board_path);
+            }
+        }
 
         Ok(Self {
             board,
@@ -1226,7 +1237,7 @@ impl AIControlledBoard {
                 self.board.clone(),
                 number_of_steps,
                 Self::wall_value,
-                0.9,
+                0.5,
                 true,
                 true,
                 100,
@@ -1257,6 +1268,43 @@ impl AIControlledBoard {
                 ai_move.1 .1,
             ),
         }
+    }
+
+    pub fn random_good_move(&mut self, small_rng: &mut SmallRng, pre_calc: &PreCalc) -> Move {
+        let deeper_good_moves = self
+            .relevant_mc_tree
+            .deeper_known_moves(&self.board, pre_calc);
+
+        let move_options = self.relevant_mc_tree.mc_node.move_options().unwrap();
+
+        let mut combined_moves = vec![];
+
+        for (game_move, mc_node, _) in move_options.iter() {
+            if let Some((_, win_rate)) = deeper_good_moves.iter().find(|x| x.0 == *game_move) {
+                combined_moves.push((*game_move, *win_rate));
+            } else {
+                combined_moves.push((*game_move, mc_node.scores().0 / mc_node.scores().1 as f32));
+            }
+        }
+
+        for (game_move, win_rate) in deeper_good_moves {
+            if combined_moves.iter().find(|x| x.0 == game_move).is_some() {
+                continue;
+            }
+            combined_moves.push((game_move, win_rate));
+        }
+        combined_moves.sort_by_key(|x| (-x.1 * 100000.0) as i32);
+
+        let max_win_rate = combined_moves[0].1;
+        let to_select: Vec<_> = combined_moves
+            .into_iter()
+            .filter(|x| x.1 > max_win_rate * 0.95)
+            .take(10)
+            .collect();
+
+        println!("good move options: {:?}", to_select);
+        // Now we want to take a random element form the iterator
+        to_select.into_iter().choose(small_rng).unwrap().0
     }
 
     pub fn wall_value(input: u8) -> f32 {
