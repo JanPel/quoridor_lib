@@ -2172,6 +2172,19 @@ mod tests {
                     == Move::Wall(WallDirection::Vertical, Position { row: 7, col: 2 })
         );
     }
+    #[test]
+    fn test_only_bad_pawn_moves_but_still_win() {
+        let board = Board::decode(
+            "26;1E5;2F5;G2v;A3h;C3h;E3h;G3h;D4v;G4h;C5v;D5h;G5h;H5v;D6h;F6v;G6v;H6h;E7v;F8v",
+        )
+        .unwrap();
 
-    use sysinfo::{Process, System};
+        let mut ai_controlled = AIControlledBoard::from_board(board);
+        let chosen_move = ai_controlled.ai_move(60_000, &PreCalc::new());
+
+        assert!(chosen_move.0 == Move::PawnMove(PawnMove::Right, Some(PawnMove::Right)));
+
+        let scores_opponent = ai_controlled.relevant_mc_tree.mc_node.scores();
+        assert!((scores_opponent.0 / scores_opponent.1 as f32) < 0.5);
+    }
 }

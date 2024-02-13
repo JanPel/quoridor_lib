@@ -4753,4 +4753,22 @@ mod test {
 
         // previous board: 10;5E4;5E6;D1v;D2h;C3v;D3h;E5v, next_board: 11;4E4;5E6;D1v;D2h;C3v;D3h;E5v;D6h, game_move:
     }
+    #[test]
+    fn test_only_bad_pawn_moves() {
+        let board = Board::decode(
+            "26;1E5;2F5;G2v;A3h;C3h;E3h;G3h;D4v;G4h;C5v;D5h;G5h;H5v;D6h;F6v;G6v;H6h;E7v;F8v",
+        )
+        .unwrap();
+
+        let start = Instant::now();
+        let cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        println!("from scratchtook: {:?}", start.elapsed());
+
+        let next_moves = board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &cache);
+        println!("{:?}", next_moves);
+        assert!(next_moves.into_iter().filter(|x| x.1 >= 0).count() >= 1);
+    }
 }
