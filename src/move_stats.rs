@@ -374,6 +374,8 @@ impl PreCalc {
             boards.push(board)
         }
         if boards.len() >= 1 {
+            // Taking higher numbered boards first, gives us a better chance of not getting bottlenecked at the end
+            boards.sort_by_key(|x| -(x.turn as i8));
             Some(boards)
         } else {
             None
