@@ -2722,24 +2722,26 @@ impl Board {
                         };
                         let pos = Position { row, col };
                         for direction in [WallDirection::Horizontal, WallDirection::Vertical] {
-                            if self
-                                .distance_to_pawn((direction, pos), self.pawns[(self.turn + 1) % 2])
-                                == 0
-                                && cache[0].allowed_walls_for_pawn[(direction, location)]
-                                    .is_allowed()
-                                && cache[1].allowed_walls_for_pawn[(direction, location)]
-                                    .is_allowed()
-                            {
-                                next_moves.push((Move::Wall(direction, location), 0));
+                            let square_distance = closest_square_distance(
+                                pos,
+                                &cache[(self.turn + 1) % 2].relevant_squares.squares,
+                            );
+                            if let Some(sq_dist) = square_distance {
+                                if sq_dist <= 1
+                                    && cache[0].allowed_walls_for_pawn[(direction, location)]
+                                        .is_allowed()
+                                    && cache[1].allowed_walls_for_pawn[(direction, location)]
+                                        .is_allowed()
+                                {
+                                    {
+                                        next_moves
+                                            .push((Move::Wall(direction, location), -sq_dist));
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                for next_move in next_moves.iter_mut() {
-                    next_move.1 += 3;
-                    next_move.1 = next_move.1.max(0);
-                }
-
                 return next_moves;
             }
         }

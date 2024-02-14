@@ -62,10 +62,9 @@ fn get_current_process_vms() -> f64 {
 fn find_next_board_sequence(ai_player: usize) -> Vec<Board> {
     // For the ai player we take the step that the monte carlo algorithm would take online.
     let mut board_sequence = vec![];
-    let precalc_file: &str =
-        &"../quoridor/split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h/to_precalc.json";
+    let precalc_file: &str = &"./precalc_full/to_precalc.json";
     let precalc = PreCalc::load(precalc_file).unwrap();
-    let mut ai_controlled_board = AIControlledBoard::decode("8;9E4;9E6;D3h;D7h").unwrap();
+    let mut ai_controlled_board = AIControlledBoard::decode("1;10E2;10E9").unwrap();
 
     board_sequence.push(ai_controlled_board.board.clone());
     while precalc
@@ -129,7 +128,20 @@ fn main() {
                                     board.relevant_mc_tree.mc_node.move_options().unwrap().len()
                                 );
                             }
-                            let _chosen_move = board.ai_move(total_simulations, &to_calc);
+                            board
+                                .relevant_mc_tree
+                                .decide_move(
+                                    board.board.clone(),
+                                    total_simulations,
+                                    AIControlledBoard::wall_value,
+                                    0.9,
+                                    true,
+                                    true,
+                                    100,
+                                    &to_calc,
+                                )
+                                .unwrap();
+
                             total_simulations += simulations_per_step;
                             println!(
                                 "--------------------- USING {:.4} % BYTES",
