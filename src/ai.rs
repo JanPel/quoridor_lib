@@ -841,9 +841,6 @@ pub fn recursive_monte_carlo(
     let prev_board = (board.turn + 1) % 2;
     let mut played_out: Option<(f32, Option<usize>)> = None;
     while to_return.game_count < number_of_loops {
-        if depth == 0 && (to_return.game_count + 1) % 100_000 == 0 {
-            println!("game count: {}", to_return.game_count);
-        }
         match mc_ref {
             MCNode::Leaf => {
                 //let start = Instant::now();
