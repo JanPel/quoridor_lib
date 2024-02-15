@@ -18,7 +18,7 @@ use crate::move_stats::{self, MoveStats, PreCalc};
 const VISIT_LIMIT: u32 = 3_500_000_000;
 
 const PRECALC_FILE: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:c6h/to_precalc.json";
-const PRECALC_FOLDER: &str = "./precalc_full/precalc";
+const PRECALC_FOLDER: &str = "./precalc";
 
 // This is the struct we will use to cache moves, the values are the best move from that board, and how strong the that calculated it was.
 pub struct AIControlledBoard {
@@ -356,7 +356,7 @@ impl MonteCarloTree {
             let res = multithreaded_mc(
                 board.clone(),
                 &mut self.mc_node,
-                10,
+                80,
                 number_of_simulations,
                 &mut small_rng,
                 0,
@@ -399,7 +399,7 @@ impl MonteCarloTree {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MCNode {
     Leaf,
     Branch {
@@ -1206,7 +1206,7 @@ impl AIControlledBoard {
         match &self.relevant_mc_tree.mc_node {
             MCNode::Branch { scores, .. } => {
                 hit_branch = true;
-                println!(
+                log::info!(
                     "player chose move which we gave a win chance of {:.1} and total visits {}",
                     scores.0 / scores.1 as f32 * 100.0,
                     scores.1
@@ -1214,7 +1214,7 @@ impl AIControlledBoard {
                 number_of_simulations = scores.1;
             }
             MCNode::Leaf => {
-                println!("opponent chose move we didn't consider");
+                log::info!("opponent chose move we didn't consider");
             }
             MCNode::PlayedOut {
                 scores,
@@ -1676,7 +1676,7 @@ pub fn select_robust_best_branch<'a>(
             }
         }
         if node_scores.1 >= visits_cutoff {
-            println!(
+            log::info!(
                 "{:?}, {:?}, {}, {:.2}",
                 move_option.0,
                 node_scores,
