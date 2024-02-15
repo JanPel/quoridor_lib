@@ -1683,6 +1683,13 @@ pub fn select_robust_best_branch<'a>(
                 move_option.2,
                 node_scores.0 / node_scores.1 as f32 * 100.0
             );
+            println!(
+                "{:?}, {:?}, {}, {:.2}",
+                move_option.0,
+                node_scores,
+                move_option.2,
+                node_scores.0 / node_scores.1 as f32 * 100.0
+            );
         }
         best_score = best_score.max(node_scores.0 / node_scores.1 as f32);
         if node_scores.1 < max_visits {

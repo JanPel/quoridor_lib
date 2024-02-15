@@ -91,7 +91,7 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
     let visits_after_removal = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
     println!("VISITS BEFORE REMOVAL: {}", original_visits);
     println!("VISITS AFTER REMOVAL: {}", visits_after_removal);
-    if visits_after_removal / original_visits > 0.7 && visits_after_removal > 500_000_000.0 {
+    if visits_after_removal > 500_000_000.0 {
         // We don't need to recalculate this node
         let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
         precalc.insert_result(board, new_score_zero);
@@ -136,7 +136,7 @@ fn find_next_board_sequence(ai_player: usize) -> (Vec<Board>, AIControlledBoard)
 }
 
 fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &mut PreCalc) {
-    if known_calc.relevant_mc_tree.mc_node.number_visits() > 300_000_000 {
+    if known_calc.relevant_mc_tree.mc_node.number_visits() > 500_000_000 {
         println!(
             "WE Don't need to CALCULATE THIS BOARD: {}, with {} visits",
             known_calc.board.encode(),
@@ -209,11 +209,11 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
                 .last_visit_count
                 .fetch_add(0, Ordering::Relaxed);
             let prune_amount = if get_current_process_vms() > 0.85 {
-                4_000_000
+                12_000_000
             } else if get_current_process_vms() > 0.7 {
-                8_000_000
+                80_000_000
             } else {
-                40_000_000
+                400_000_000
             };
             if visit_count >= 10_000_000 {
                 prune_nodes(
