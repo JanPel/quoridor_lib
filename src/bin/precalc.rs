@@ -11,11 +11,36 @@ const PRECALC_FILE: &str = "./to_precalc.json";
 const PRECALC_FOLDER: &str = "./precalc";
 
 fn remove_known_moves_for_precalc(mc_ref: &mut MCNode, current_board: &Board, pre_calc: &PreCalc) {
+    println!(
+        "REMOVING KNOWN MOVES: OLD MOVES AMOUNT IS: {}",
+        mc_ref.move_options().unwrap().len()
+    );
     mc_ref.move_options().unwrap().retain(|game_move| {
         let mut next_board = current_board.clone();
         next_board.game_move(game_move.0);
         pre_calc.roll_out_score(&next_board).is_none()
-    })
+    });
+    println!(
+        "AFTER REMOVING KNOWN MOVES: NEW MOVES AMOUNT IS: {}",
+        mc_ref.move_options().unwrap().len()
+    );
+    // Update the scores of the current node to be equal to tath of the next_moves scores summed
+    let mut scores_children = (0.0, 0);
+    for (_, node, _) in mc_ref.move_options().unwrap().iter() {
+        let node_score = node.scores();
+        scores_children.0 += node_score.0;
+        scores_children.1 += node_score.1;
+    }
+
+    match mc_ref {
+        MCNode::Branch { scores, .. } => {
+            *scores = (
+                scores_children.1 as f32 - scores_children.0,
+                scores_children.1,
+            )
+        }
+        _ => (),
+    }
 }
 
 pub fn prune_nodes(mc_node: &mut MCNode, last_visit_cutoff: u32, final_prune: bool) {
@@ -66,7 +91,7 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
     let visits_after_removal = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
     println!("VISITS BEFORE REMOVAL: {}", original_visits);
     println!("VISITS AFTER REMOVAL: {}", visits_after_removal);
-    if visits_after_removal / original_visits > 0.7 && visits_after_removal > 400_000_000.0 {
+    if visits_after_removal / original_visits > 0.7 && visits_after_removal > 500_000_000.0 {
         // We don't need to recalculate this node
         let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
         precalc.insert_result(board, new_score_zero);
@@ -83,19 +108,11 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
     }
 }
 
-// Here we want to return all the plausible boards where the game could end up.
-fn next_potential_boards(board: Board) -> Vec<Board> {
-    unimplemented!()
-}
-
-// After running lots of precalcs for known moves from quoridor games online, Now we want to expand some nodes that are not too deep in the game and where we could end up.
 // We will do this seperately for black and white.
-
 fn find_next_board_sequence(ai_player: usize) -> (Vec<Board>, AIControlledBoard) {
     // For the ai player we take the step that the monte carlo algorithm would take online.
     let mut board_sequence = vec![];
-    let precalc_file: &str = &"./precalc_full/to_precalc.json";
-    let precalc = PreCalc::load(precalc_file).unwrap();
+    let precalc = PreCalc::load(PRECALC_FILE).unwrap();
     let mut ai_controlled_board = AIControlledBoard::decode("7;9E4;10E6;D3h").unwrap();
 
     board_sequence.push(ai_controlled_board.board.clone());
@@ -149,32 +166,81 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
 }
 
 fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
-    let mut ai_board = AIControlledBoard::from_board(board.clone());
+    let mut board = AIControlledBoard::from_board(board.clone());
     let simulations_per_step = 1_000_000;
     let mut total_simulations = simulations_per_step;
-    for _ in 0..(180 * 10) {
-        ai_board
+    for i in 1..(1811) {
+        // After all legal moves for step one have been expanded.
+        if i == 3 {
+            remove_known_moves_for_precalc(
+                &mut board.relevant_mc_tree.mc_node,
+                &board.board,
+                &precalc,
+            );
+        }
+        board
             .relevant_mc_tree
             .decide_move(
-                board.clone(),
+                board.board.clone(),
                 total_simulations,
                 AIControlledBoard::wall_value,
                 0.9,
                 true,
                 true,
                 100,
-                precalc,
+                &precalc,
             )
             .unwrap();
+
         total_simulations += simulations_per_step;
+        println!(
+            "--------------------- USING {:.4} % BYTES",
+            get_current_process_vms() * 100.0
+        );
+        if get_current_process_vms() > 0.91 {
+            println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");
+            break;
+        }
+        // Every Million steps we prune
+        if i % 25 == 0 {
+            let start = Instant::now();
+            let visit_count = board
+                .relevant_mc_tree
+                .last_visit_count
+                .fetch_add(0, Ordering::Relaxed);
+            let prune_amount = if get_current_process_vms() > 0.85 {
+                4_000_000
+            } else if get_current_process_vms() > 0.7 {
+                8_000_000
+            } else {
+                40_000_000
+            };
+            if visit_count >= 10_000_000 {
+                prune_nodes(
+                    &mut board.relevant_mc_tree.mc_node,
+                    visit_count - prune_amount,
+                    false,
+                );
+            }
+            println!("Time to prune TREE is: {:?}", start.elapsed());
+        }
     }
-    ai_board.relevant_mc_tree.serialize_to_file(&format!(
+    prune_nodes(
+        &mut board.relevant_mc_tree.mc_node,
+        board
+            .relevant_mc_tree
+            .last_visit_count
+            .fetch_add(0, Ordering::Relaxed),
+        true,
+    );
+    board.relevant_mc_tree.serialize_to_file(&format!(
         "{}/{}.mc_node",
         PRECALC_FOLDER,
-        board.encode()
+        board.board.encode()
     ));
-    let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(&board, precalc);
-    precalc.insert_result(&board, new_score_zero);
+
+    let new_score_zero = board.relevant_mc_tree.score_for_zero(&board.board, precalc);
+    precalc.insert_result(&board.board, new_score_zero);
 }
 
 fn precalc_next_step(ai_player: usize) {
@@ -185,7 +251,6 @@ fn precalc_next_step(ai_player: usize) {
         println!("{}", board.encode());
     }
     let mut precalc = PreCalc::load(PRECALC_FILE).unwrap();
-
     pre_calculate_board_with_cache(last_board, &mut precalc);
     precalc.store(PRECALC_FILE);
 
@@ -365,5 +430,12 @@ mod tests {
         );
 
         precalc_next_step(0);
+    }
+
+    #[test]
+    fn test_update_win_rate() {
+        let board = Board::decode("7;9E4;10E6;D3h").unwrap();
+        let mut precalc = PreCalc::load(PRECALC_FILE).unwrap();
+        update_win_rate(&board, &mut precalc);
     }
 }

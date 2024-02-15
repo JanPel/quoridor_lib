@@ -468,7 +468,7 @@ impl MCNode {
         }
     }
 
-    fn scores(&self) -> (f32, u32) {
+    pub fn scores(&self) -> (f32, u32) {
         match self {
             MCNode::Leaf => (1.0, 1),
             MCNode::Branch { scores, .. } => *scores,
