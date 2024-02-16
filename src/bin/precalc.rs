@@ -91,7 +91,7 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
     let visits_after_removal = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
     println!("VISITS BEFORE REMOVAL: {}", original_visits);
     println!("VISITS AFTER REMOVAL: {}", visits_after_removal);
-    if visits_after_removal > 500_000_000.0 {
+    if visits_after_removal > 200_000_000.0 {
         // We don't need to recalculate this node
         let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
         precalc.insert_result(board, new_score_zero);
@@ -109,11 +109,14 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
 }
 
 // We will do this seperately for black and white.
-fn find_next_board_sequence(ai_player: usize) -> (Vec<Board>, AIControlledBoard) {
+fn find_next_board_sequence(
+    ai_player: usize,
+    start_board: Board,
+) -> (Vec<Board>, AIControlledBoard) {
     // For the ai player we take the step that the monte carlo algorithm would take online.
     let mut board_sequence = vec![];
     let precalc = PreCalc::load(PRECALC_FILE).unwrap();
-    let mut ai_controlled_board = AIControlledBoard::decode("7;9E4;10E6;D3h").unwrap();
+    let mut ai_controlled_board = AIControlledBoard::decode(&start_board.encode()).unwrap();
 
     board_sequence.push(ai_controlled_board.board.clone());
     while precalc
@@ -136,7 +139,7 @@ fn find_next_board_sequence(ai_player: usize) -> (Vec<Board>, AIControlledBoard)
 }
 
 fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &mut PreCalc) {
-    if known_calc.relevant_mc_tree.mc_node.number_visits() > 500_000_000 {
+    if known_calc.relevant_mc_tree.mc_node.number_visits() > 1500_000_000 {
         println!(
             "WE Don't need to CALCULATE THIS BOARD: {}, with {} visits",
             known_calc.board.encode(),
@@ -164,12 +167,98 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
         pre_calculate_board(known_calc.board, precalc);
     }
 }
-
+// We do a new strategy for precalculating.
+// First we we will use all our cores to run for 100 million steps. Then we expand the 10 best moves and run for 250 million steps per move
 fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
     let mut board = AIControlledBoard::from_board(board.clone());
-    let simulations_per_step = 1_000_000;
+    // First we prepopulate the board.
+    for i in 0..3 {
+        board
+            .relevant_mc_tree
+            .decide_move_mc(
+                board.board.clone(),
+                30_000,
+                1,
+                AIControlledBoard::wall_value,
+                0.9,
+                true,
+                true,
+                100,
+                &precalc,
+            )
+            .unwrap();
+    }
+    remove_known_moves_for_precalc(&mut board.relevant_mc_tree.mc_node, &board.board, &precalc);
+
+    let simulations_per_step = 100_000_000;
     let mut total_simulations = simulations_per_step;
-    for i in 1..(1811) {
+    board
+        .relevant_mc_tree
+        .decide_move_mc(
+            board.board.clone(),
+            total_simulations,
+            80,
+            AIControlledBoard::wall_value,
+            0.9,
+            true,
+            true,
+            100,
+            &precalc,
+        )
+        .unwrap();
+
+    // Now we will find the 10 nodes with the best score
+    let mut best_moves: Vec<_> = board
+        .relevant_mc_tree
+        .mc_node
+        .move_options()
+        .unwrap()
+        .into_iter()
+        .map(|x| (x.0, x.1.scores()))
+        .collect();
+
+    // Sort by the win rate
+    best_moves.sort_by_key(|x| (-(x.1 .0 / x.1 .1 as f32) * 10000.0) as i32);
+    // Now we take the best 10 moves
+    println!("THE BEST MOVES ARE: ");
+    best_moves = best_moves.into_iter().take(10).collect();
+    for game_move in &best_moves {
+        println!(
+            "{:?}, with win rate {}",
+            game_move.0,
+            game_move.1 .0 / game_move.1 .1 as f32
+        );
+    }
+    println!("-------------------------------------");
+
+    std::thread::scope(|s| {
+        let mut handles = vec![];
+        for (move_option, _) in best_moves {
+            let mut new_board = board.board.clone();
+            new_board.game_move(move_option);
+            let precalc = precalc.clone();
+            handles.push(s.spawn(move || {
+                let score = pre_calculate_sub_board(new_board.clone(), &precalc);
+                (new_board, score)
+            }));
+        }
+        for handle in handles {
+            let (new_board, score) = handle.join().unwrap();
+            precalc.insert_result(&new_board, score);
+        }
+        precalc.store(PRECALC_FILE);
+    });
+    let board_score = pre_calculate_sub_board(board.board.clone(), precalc);
+    precalc.insert_result(&board.board, board_score);
+    precalc.store(PRECALC_FILE);
+}
+
+fn pre_calculate_sub_board(board: Board, precalc: &PreCalc) -> f32 {
+    let mut board = AIControlledBoard::from_board(board.clone());
+    let simulations_per_step = 100_000;
+    let mut total_simulations = simulations_per_step;
+    //250 million steps
+    for i in 1..2510 {
         // After all legal moves for step one have been expanded.
         if i == 3 {
             remove_known_moves_for_precalc(
@@ -180,9 +269,10 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
         }
         board
             .relevant_mc_tree
-            .decide_move(
+            .decide_move_mc(
                 board.board.clone(),
                 total_simulations,
+                8,
                 AIControlledBoard::wall_value,
                 0.9,
                 true,
@@ -209,13 +299,13 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
                 .last_visit_count
                 .fetch_add(0, Ordering::Relaxed);
             let prune_amount = if get_current_process_vms() > 0.85 {
-                12_000_000
+                4_000_000
             } else if get_current_process_vms() > 0.7 {
-                80_000_000
+                8_000_000
             } else {
-                400_000_000
+                30_000_000
             };
-            if visit_count >= 10_000_000 {
+            if visit_count >= 400_000_000 {
                 prune_nodes(
                     &mut board.relevant_mc_tree.mc_node,
                     visit_count - prune_amount,
@@ -240,11 +330,11 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
     ));
 
     let new_score_zero = board.relevant_mc_tree.score_for_zero(&board.board, precalc);
-    precalc.insert_result(&board.board, new_score_zero);
+    new_score_zero
 }
 
-fn precalc_next_step(ai_player: usize) {
-    let (board_sequence, last_board) = find_next_board_sequence(ai_player);
+fn precalc_next_step(ai_player: usize, start_board: Board) {
+    let (board_sequence, last_board) = find_next_board_sequence(ai_player, start_board);
 
     println!("GOING TO CALCULATE THE FOLLOWING BOARD SEQUENCE");
     for board in &board_sequence {
@@ -399,8 +489,22 @@ fn precalc_next_step(ai_player: usize) {
 //}
 
 fn main() {
-    // We will make this into a loop later on
-    precalc_next_step(0);
+    let start_board = Board::decode("13;7E5;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
+    precalc_next_step(0, start_board);
+    let start_board = Board::decode("12;7E4;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
+    precalc_next_step(0, start_board);
+    let start_board = Board::decode("12;7E5;7E6;D3h;F3h;H3h;D7h;F7h").unwrap();
+    precalc_next_step(0, start_board);
+    let start_board = Board::decode("11;9E5;8E6;D3h;D7h;F7h;F3h").unwrap();
+    precalc_next_step(0, start_board);
+    let start_board = Board::decode("10;9E5;8E6;D3h;D7h;F7h").unwrap();
+    precalc_next_step(0, start_board);
+
+    let start_board = Board::decode("7;9E4;10E6;D3h").unwrap();
+    loop {
+        precalc_next_step(0, start_board.clone());
+        precalc_next_step(1, start_board.clone());
+    }
 }
 
 #[cfg(test)]
@@ -409,8 +513,9 @@ mod tests {
 
     #[test]
     fn test_find_next_board_sequence() {
+        let start_board = Board::decode("7;9E4;10E6;D3h").unwrap();
         // FOR PLAYER 0
-        let (board_sequence, last_board) = find_next_board_sequence(0);
+        let (board_sequence, last_board) = find_next_board_sequence(0, start_board.clone());
         for board in board_sequence {
             println!("{}", board.encode());
         }
@@ -420,7 +525,7 @@ mod tests {
         );
 
         // FOR PLAYER 1
-        let (board_sequence, last_board) = find_next_board_sequence(1);
+        let (board_sequence, last_board) = find_next_board_sequence(1, start_board.clone());
         for board in board_sequence {
             println!("{}", board.encode());
         }
@@ -429,7 +534,7 @@ mod tests {
             last_board.relevant_mc_tree.mc_node.number_visits()
         );
 
-        precalc_next_step(0);
+        precalc_next_step(0, start_board.clone());
     }
 
     #[test]

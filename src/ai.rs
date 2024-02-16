@@ -325,6 +325,78 @@ impl MonteCarloTree {
         }
         Ok(best_move)
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn decide_move_mc(
+        &mut self,
+        board: Board,
+        mut number_of_simulations: u32,
+        number_of_threads: u32,
+        wall_value: fn(u8) -> f32,
+        explore_constant: f32,
+        new_logic: bool,
+        roll_out_new: bool,
+        number_of_averages: u32,
+        pre_calc: &PreCalc,
+    ) -> Result<(Move, (f32, u32)), Box<dyn std::error::Error + Sync + Send>> {
+        if number_of_simulations >= self.mc_node.number_visits() {
+            if self.mc_node.number_visits() >= VISIT_LIMIT {
+                // We're running too close to the integer limit
+                number_of_simulations = 0;
+            } else {
+                number_of_simulations -= self.mc_node.number_visits();
+            }
+        } else {
+            number_of_simulations = 0;
+        }
+
+        if number_of_simulations >= 1 {
+            let mut small_rng = SmallRng::from_entropy();
+            let mut timings = Timings::default();
+            let start = Instant::now();
+            let res = multithreaded_mc(
+                board.clone(),
+                &mut self.mc_node,
+                number_of_threads,
+                number_of_simulations,
+                &mut small_rng,
+                0,
+                wall_value,
+                explore_constant,
+                new_logic,
+                &mut timings,
+                roll_out_new,
+                number_of_averages,
+                &mut self.cache,
+                self.last_visit_count.clone(),
+                &pre_calc,
+            );
+            if res.last_visit_count >= 10_000_000 {
+                let start = Instant::now();
+
+                println!("Pruning nodes, took {:?}", start.elapsed());
+            }
+            println!("Deciding On move took: {:?}", start.elapsed());
+        }
+        //println!("{:?}", timings);
+        let move_options = self
+            .mc_node
+            .move_options()
+            .ok_or("Need to enough simulations to expand root leaf")?;
+        move_options.sort_by_key(|x| x.1.number_visits());
+        let best_move =
+            select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
+        if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
+            println!("best precalc alernativie is {:?}", precalc_option);
+            if precalc_option.1 > best_move.1 .0 / best_move.1 .1 as f32 {
+                println!("best precalc alernativie better");
+                return Ok((
+                    precalc_option.0,
+                    (precalc_option.1 * 250_000_000.0, 250_000_000),
+                ));
+            }
+        }
+        Ok(best_move)
+    }
     // We only want to include this function with non wasm
     #[cfg(not(target_arch = "wasm32"))]
     pub fn decide_move(
@@ -492,7 +564,7 @@ impl MCNode {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn multithreaded_mc(
+pub fn multithreaded_mc(
     board: Board,
     mc_ref: &mut MCNode,
     number_threads: u32,
@@ -1618,6 +1690,7 @@ fn select_most_promising_branch<'a>(
         }
     }
 
+    // When the best has only been visited a couple of times
     let moves_allowed = if parent_visits >= 1000 && highest_scores.1 >= 3 {
         std::cmp::min(
             parent_visits / 10,

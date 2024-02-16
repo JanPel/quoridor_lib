@@ -237,7 +237,7 @@ impl MoveStats {
 }
 
 // Store the precalcuted scores for player zero in a HashMap;
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PreCalc {
     scores_player_zero: HashMap<String, Option<f32>>,
 }
