@@ -3,6 +3,7 @@ mod walls;
 
 use std::char::MAX;
 use std::collections::VecDeque;
+use std::intrinsics::atomic_cxchg_seqcst_acquire;
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -2727,6 +2728,10 @@ impl Board {
                                 &cache[(self.turn + 1) % 2].relevant_squares.squares,
                             );
                             if let Some(sq_dist) = square_distance {
+                                let sq_dist = sq_dist
+                                    + cache[(self.turn + 1) % 2]
+                                        .relevant_squares
+                                        .dist_walked_unhindered;
                                 if sq_dist <= 1
                                     && cache[0].allowed_walls_for_pawn[(direction, location)]
                                         .is_allowed()
