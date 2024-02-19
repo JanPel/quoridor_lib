@@ -1089,8 +1089,13 @@ pub fn recursive_monte_carlo(
                     }
                     let number_of_positive_scores = next_moves.iter().filter(|x| x.2 >= 0).count();
                     if number_of_positive_scores >= 1 {
+                        if number_of_positive_scores == next_moves.len() {
+                            *scores_included = -1;
+                        }
                         next_moves = next_moves.into_iter().filter(|x| x.2 >= 0).collect();
                         // To make sure we don't waste space.
+                    } else {
+                        *scores_included = -1;
                     }
                     next_moves.shrink_to_fit();
                     *move_options = Some(Box::new(next_moves));

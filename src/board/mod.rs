@@ -3445,6 +3445,60 @@ pub enum Move {
     Wall(WallDirection, Position),
 }
 
+#[derive(Debug)]
+pub enum MirrorMoveType {
+    Left,
+    Right,
+    Neutral,
+}
+
+impl Move {
+    pub fn mirror_move_type(&self) -> MirrorMoveType {
+        match self {
+            Self::PawnMove(first_step, _second_step) => match first_step {
+                PawnMove::Left => MirrorMoveType::Left,
+                PawnMove::Right => MirrorMoveType::Right,
+                _ => MirrorMoveType::Neutral,
+            },
+            Self::Wall(_direction, location) => {
+                if location.col < 4 {
+                    MirrorMoveType::Left
+                } else {
+                    MirrorMoveType::Right
+                }
+            }
+        }
+    }
+
+    pub fn mirror_move(&self) -> Self {
+        match self {
+            Self::PawnMove(first_step, second_step) => {
+                let new_first_step = match first_step {
+                    PawnMove::Left => PawnMove::Right,
+                    PawnMove::Right => PawnMove::Left,
+                    _ => *first_step,
+                };
+                let new_second_step = match second_step {
+                    Some(PawnMove::Left) => Some(PawnMove::Right),
+                    Some(PawnMove::Right) => Some(PawnMove::Left),
+                    _ => *second_step,
+                };
+                Self::PawnMove(new_first_step, new_second_step)
+            }
+            Self::Wall(direction, location) => {
+                let new_col = 7 - location.col;
+                Self::Wall(
+                    *direction,
+                    Position {
+                        row: location.row,
+                        col: new_col,
+                    },
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     #[test]
