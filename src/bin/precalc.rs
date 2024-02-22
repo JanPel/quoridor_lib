@@ -163,6 +163,7 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
         known_calc.game_move(ai_move_from_known_calc.0);
 
         if known_calc.relevant_mc_tree.mc_node.number_visits() > 200_000_000 {
+            // We can add this node to the precalc stuff.
             println!(
                 "WE WILL STORE THE NODE {}, cause it has {} visits, the win rate for zero is {}",
                 known_calc.board.encode(),
@@ -182,7 +183,6 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
             ));
         }
 
-        // We can add this node to the precalc stuff.
     }
     pre_calculate_board(board_to_calc, precalc);
 }

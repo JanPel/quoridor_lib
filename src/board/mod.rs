@@ -1683,13 +1683,11 @@ impl OpenRoutes {
         allowed_walls: &AllowedWalls,
         distances_to_finish: &DistancesToFinish,
     ) -> Vec<Position> {
-        let mut walked_to = [[false; 9]; 9];
+        let mut walked_to = [[None; 9]; 9];
         let mut finished_paths = vec![];
-        walked_to[pawn.position] = true;
-        let first_step = vec![pawn.position];
-        let mut best_to_explore: BinaryHeap<(usize, Vec<Position>, Position)> = BinaryHeap::new();
-        best_to_explore.push((1, first_step, pawn.position));
-        while let Some((_number_of_steps, steps, current)) = best_to_explore.pop() {
+        let mut best_to_explore: BinaryHeap<(usize, Position)> = BinaryHeap::new();
+        best_to_explore.push((1, pawn.position));
+        while let Some((number_of_steps, current)) = best_to_explore.pop() {
             let mut made_step = false;
             'inner: for pawn_move in PAWN_MOVES_DOWN_LAST {
                 if self.is_open(current, pawn_move) {
@@ -1700,7 +1698,7 @@ impl OpenRoutes {
                         continue 'inner;
                     }
                     // This path joins an already walked to path, so irrelevant
-                    if walked_to[next] {
+                    if walked_to[next].is_some() {
                         continue 'inner;
                     }
 
@@ -1727,15 +1725,13 @@ impl OpenRoutes {
                             }
                         };
                     }
-                    let mut next_steps = steps.clone();
-                    next_steps.push(next);
-                    best_to_explore.push((next_steps.len(), next_steps, next));
-                    walked_to[next] = true;
+                    best_to_explore.push((number_of_steps + 1, next));
+                    walked_to[next] = Some(current);
                     made_step = true;
                 }
             }
             if !made_step {
-                finished_paths.push(steps);
+                finished_paths.push(Self::follow_path_back(current, &walked_to));
             }
         }
         let mut longest_path = vec![];
@@ -1745,6 +1741,21 @@ impl OpenRoutes {
             }
         }
         longest_path
+    }
+
+    fn follow_path_back(
+        position: Position,
+        prev_step: &[[Option<Position>; 9]; 9],
+    ) -> Vec<Position> {
+        let mut steps_back = vec![];
+        let mut current = position;
+        while let Some(next) = prev_step[current] {
+            steps_back.push(current);
+            current = next;
+        }
+        steps_back.push(current);
+        steps_back.reverse();
+        steps_back
     }
     // Takes all the steps for this pawn along the shortest path, as long as the path can never be blocked off.
     // Returns the number of steps taken and the new position
