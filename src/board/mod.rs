@@ -1126,7 +1126,6 @@ impl NextMovesCache {
         new_board: &Board,
         pawn_index: usize,
     ) -> Self {
-        println!("calculating new cache for pawn {}", pawn_index);
         let is_this_cache_turn = old_board.turn % 2 == pawn_index;
         let new_distances = self
             .distances_to_finish
@@ -1688,11 +1687,9 @@ impl OpenRoutes {
         let mut finished_paths = vec![];
         walked_to[pawn.position] = true;
         let first_step = vec![pawn.position];
-        println!("FIRST STEP: {:?}", first_step);
         let mut best_to_explore: BinaryHeap<(usize, Vec<Position>, Position)> = BinaryHeap::new();
         best_to_explore.push((1, first_step, pawn.position));
         pretty_print(distances_to_finish.dist);
-        println!("{:?}", distances_to_finish.dist[5][6]);
         while let Some((_number_of_steps, steps, current)) = best_to_explore.pop() {
             let mut made_step = false;
             'inner: for pawn_move in PAWN_MOVES_DOWN_LAST {
@@ -5068,7 +5065,25 @@ mod test {
             compare_cache(proper_cache, prev_cache, &prev_board, &board, prev_move);
         }
     }
-    //
-    //"29;1E5;1G6;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h",F1v,
-    //"29;1E5;1G6;F1v;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h",
+
+    #[test]
+    fn test_longest_route() {
+        let board = Board::decode(
+            "30;1E5;0G6;F1v;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h",
+        )
+        .unwrap();
+
+        let start = Instant::now();
+        let proper_cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        println!("from scratchtook: {:?}", start.elapsed());
+        let mut longest_route = board.open_routes.furthest_walkable_unhindered(
+            board.pawns[1],
+            &proper_cache[1].allowed_walls_for_pawn,
+            &proper_cache[1].distances_to_finish,
+        );
+        assert_eq!(longest_route.pop().unwrap(), Position { row: 2, col: 6 });
+    }
 }
