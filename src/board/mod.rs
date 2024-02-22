@@ -1126,6 +1126,7 @@ impl NextMovesCache {
         new_board: &Board,
         pawn_index: usize,
     ) -> Self {
+        println!("calculating new cache for pawn {}", pawn_index);
         let is_this_cache_turn = old_board.turn % 2 == pawn_index;
         let new_distances = self
             .distances_to_finish
@@ -1698,29 +1699,18 @@ impl OpenRoutes {
                 if self.is_open(current, pawn_move) {
                     let next = current.add_move(pawn_move);
                     let current_distance_to_finish = distances_to_finish.dist[current].unwrap();
-                    println!(
-                        "{:?}, {:?}, {:?}, next_distance {}, current_distance {}",
-                        pawn_move,
-                        current,
-                        next,
-                        distances_to_finish.dist[next].unwrap(),
-                        current_distance_to_finish
-                    );
 
                     if distances_to_finish.dist[next].unwrap() >= current_distance_to_finish {
                         continue 'inner;
                     }
-                    println!("CLOSER TO FINISH");
                     // This path joins an already walked to path, so irrelevant
                     if walked_to[next] {
                         continue 'inner;
                     }
 
-                    println!("NOT ALREADY SEEN");
                     // If a wall can be placed, we break the loop.
                     for relevant_walls in current.relevant_walls(pawn_move) {
                         let wall_type = allowed_walls[relevant_walls];
-                        println!("{:?}, {:?}", relevant_walls, wall_type);
                         match wall_type {
                             WallType::Allowed | WallType::Pocket => {
                                 continue 'inner;
@@ -1741,7 +1731,6 @@ impl OpenRoutes {
                             }
                         };
                     }
-                    println!("OPEN");
                     let mut next_steps = steps.clone();
                     next_steps.push(next);
                     best_to_explore.push((next_steps.len(), next_steps, next));
@@ -2927,7 +2916,7 @@ impl Board {
         let mut prev_board = self.clone();
         prev_board.turn -= 1;
         for pawn_move in prev_board.next_pawn_moves() {
-            prev_board = prev_board.clone();
+            let mut prev_board = prev_board.clone();
             prev_board.move_pawn(pawn_move.0);
             prev_board.turn -= 1;
             prev_boards.push((
@@ -5047,6 +5036,8 @@ mod test {
         println!("{:?}", next_moves);
         assert!(next_moves.into_iter().filter(|x| x.1 >= 0).count() >= 1);
         for (prev_board, prev_move) in board.previous_boards() {
+            println!("-----------------------");
+            println!("{} {:?}", prev_board.encode(), prev_move);
             let cache = [
                 NextMovesCache::new(&prev_board, 0),
                 NextMovesCache::new(&prev_board, 1),
@@ -5060,7 +5051,6 @@ mod test {
                 //continue;
             }
 
-            println!("{} {:?}", prev_board.encode(), prev_move);
             println!(
                 "prev board moves: {:?}",
                 prev_board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &cache)
