@@ -150,33 +150,41 @@ fn find_next_board_sequence(
 }
 
 fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &mut PreCalc) {
-    if known_calc.relevant_mc_tree.mc_node.number_visits() > 1500_000_000 {
-        println!(
-            "WE Don't need to CALCULATE THIS BOARD: {}, with {} visits",
-            known_calc.board.encode(),
-            known_calc.relevant_mc_tree.mc_node.number_visits()
-        );
-        // We will just store this node
-        known_calc.relevant_mc_tree.serialize_to_file(&format!(
-            "{}/{}.mc_node",
-            PRECALC_FOLDER,
-            known_calc.board.encode()
-        ));
-        precalc.insert_result(
-            &known_calc.board,
-            known_calc
-                .relevant_mc_tree
-                .score_for_zero(&known_calc.board, precalc),
-        );
-    } else {
-        println!(
-            "WE need to CALCULATE THIS BOARD: {}, with {} visits",
-            known_calc.board.encode(),
-            known_calc.relevant_mc_tree.mc_node.number_visits()
-        );
+    let board_to_calc = known_calc.board.clone();
+    let ai_move_from_known_calc = known_calc.ai_move(100, precalc);
+    let number_visits_best_move = ai_move_from_known_calc.2;
+    if number_visits_best_move >= 200_000_000
+        // Not a known node
+        && number_visits_best_move < 250_000_000
+        // Not one of the remants of precalcing with 80 cores
+        && known_calc.relevant_mc_tree.mc_node.number_visits() <= 250_000_000
+    {
+        // We will insert the best move with its score in precalc and store if.
+        known_calc.game_move(ai_move_from_known_calc.0);
 
-        pre_calculate_board(known_calc.board, precalc);
+        if known_calc.relevant_mc_tree.mc_node.number_visits() > 200_000_000 {
+            println!(
+                "WE WILL STORE THE NODE {}, cause it has {} visits, the win rate for zero is {}",
+                known_calc.board.encode(),
+                known_calc.relevant_mc_tree.mc_node.number_visits(),
+                known_calc
+                    .relevant_mc_tree
+                    .score_for_zero(&known_calc.board, precalc)
+            );
+            let new_score_zero = known_calc
+                .relevant_mc_tree
+                .score_for_zero(&known_calc.board, precalc);
+            precalc.insert_result(&known_calc.board, new_score_zero);
+            known_calc.relevant_mc_tree.serialize_to_file(&format!(
+                "{}/{}.mc_node",
+                PRECALC_FOLDER,
+                known_calc.board.encode()
+            ));
+        }
+
+        // We can add this node to the precalc stuff.
     }
+    pre_calculate_board(board_to_calc, precalc);
 }
 // We do a new strategy for precalculating.
 // First we we will use all our cores to run for 100 million steps. Then we expand the 10 best moves and run for 250 million steps per move
@@ -529,10 +537,12 @@ fn main() {
     //let start_board = Board::decode("10;9E5;8E6;D3h;D7h;F7h").unwrap();
     //precalc_next_step(0, start_board);
 
-    let start_board = Board::decode("7;9E4;10E6;D3h").unwrap();
+    let start_board_basic = Board::decode("7;9E4;10E6;D3h").unwrap();
+
+    let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
     loop {
-        precalc_next_step(0, start_board.clone());
-        precalc_next_step(1, start_board.clone());
+        precalc_next_step(0, start_board_further.clone());
+        precalc_next_step(1, start_board_basic.clone());
     }
 }
 

@@ -1689,7 +1689,6 @@ impl OpenRoutes {
         let first_step = vec![pawn.position];
         let mut best_to_explore: BinaryHeap<(usize, Vec<Position>, Position)> = BinaryHeap::new();
         best_to_explore.push((1, first_step, pawn.position));
-        pretty_print(distances_to_finish.dist);
         while let Some((_number_of_steps, steps, current)) = best_to_explore.pop() {
             let mut made_step = false;
             'inner: for pawn_move in PAWN_MOVES_DOWN_LAST {
@@ -5079,11 +5078,13 @@ mod test {
             NextMovesCache::new(&board, 1),
         ];
         println!("from scratchtook: {:?}", start.elapsed());
+        let start = std::time::Instant::now();
         let mut longest_route = board.open_routes.furthest_walkable_unhindered(
             board.pawns[1],
             &proper_cache[1].allowed_walls_for_pawn,
             &proper_cache[1].distances_to_finish,
         );
+        println!("{:?}", start.elapsed());
         assert_eq!(longest_route.pop().unwrap(), Position { row: 2, col: 6 });
     }
 }
