@@ -2,7 +2,7 @@ mod end_game;
 mod walls;
 
 use std::char::MAX;
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -625,7 +625,7 @@ impl RelevantSquares {
         if let Some((walked_steps, excluded)) = board.open_routes.pawn_walk_unhindered(
             pawn,
             allowed_walls_for_pawn,
-            &distances_to_finish.dist,
+            &distances_to_finish,
         ) {
             pawn.position = *walked_steps.last().unwrap();
 
@@ -874,7 +874,7 @@ impl RelevantSquares {
                 // Now we want to check whether the pawn moved to a square where the pawn can walk unhindered.
                 if let Some((walked_to_unhindered, excluded)) = new_board
                     .open_routes
-                    .pawn_walk_unhindered(new_pawn, allowed_walls, &distances_to_finish.dist)
+                    .pawn_walk_unhindered(new_pawn, allowed_walls, &distances_to_finish)
                 {
                     if walked_to_unhindered.last().unwrap().row == new_pawn.goal_row {
                         return Self::walk_to_finish(walked_to_unhindered);
@@ -934,7 +934,7 @@ impl RelevantSquares {
                 let walked_to_unhindered = new_board.open_routes.pawn_walk_unhindered(
                     temp_pawn,
                     allowed_walls,
-                    &distances_to_finish.dist,
+                    &distances_to_finish,
                 );
                 let mut updated_distances = false;
                 if let Some((walked_to_unhindered, excluded)) = walked_to_unhindered {
@@ -1677,31 +1677,50 @@ impl OpenRoutes {
         (count, distance)
     }
 
-    // Takes all the steps for this pawn along the shortest path, as long as the path can never be blocked off.
-    // Returns the number of steps taken and the new position
-    // Contains an error currently. If we walk are in tunnel, but back is till open, it will take one step forward.
-    // TODO: look at error
-    pub fn pawn_walk_unhindered(
+    pub fn furthest_walkable_unhindered(
         &self,
         pawn: Pawn,
         allowed_walls: &AllowedWalls,
-        distances_to_finish: &[[Option<i8>; 9]; 9],
-    ) -> Option<(Vec<Position>, [[Option<i8>; 9]; 9])> {
-        let mut current_distance_to_finish = distances_to_finish[pawn.position].unwrap();
-        let mut current = pawn.position;
-        let mut to_return = vec![pawn.position];
-        let mut made_step = true;
-        while made_step {
-            made_step = false;
+        distances_to_finish: &DistancesToFinish,
+    ) -> Vec<Position> {
+        let mut walked_to = [[false; 9]; 9];
+        let mut finished_paths = vec![];
+        walked_to[pawn.position] = true;
+        let first_step = vec![pawn.position];
+        println!("FIRST STEP: {:?}", first_step);
+        let mut best_to_explore: BinaryHeap<(usize, Vec<Position>, Position)> = BinaryHeap::new();
+        best_to_explore.push((1, first_step, pawn.position));
+        pretty_print(distances_to_finish.dist);
+        println!("{:?}", distances_to_finish.dist[5][6]);
+        while let Some((_number_of_steps, steps, current)) = best_to_explore.pop() {
+            let mut made_step = false;
             'inner: for pawn_move in PAWN_MOVES_DOWN_LAST {
                 if self.is_open(current, pawn_move) {
                     let next = current.add_move(pawn_move);
-                    if distances_to_finish[next].unwrap() >= current_distance_to_finish {
+                    let current_distance_to_finish = distances_to_finish.dist[current].unwrap();
+                    println!(
+                        "{:?}, {:?}, {:?}, next_distance {}, current_distance {}",
+                        pawn_move,
+                        current,
+                        next,
+                        distances_to_finish.dist[next].unwrap(),
+                        current_distance_to_finish
+                    );
+
+                    if distances_to_finish.dist[next].unwrap() >= current_distance_to_finish {
                         continue 'inner;
                     }
+                    println!("CLOSER TO FINISH");
+                    // This path joins an already walked to path, so irrelevant
+                    if walked_to[next] {
+                        continue 'inner;
+                    }
+
+                    println!("NOT ALREADY SEEN");
                     // If a wall can be placed, we break the loop.
                     for relevant_walls in current.relevant_walls(pawn_move) {
                         let wall_type = allowed_walls[relevant_walls];
+                        println!("{:?}, {:?}", relevant_walls, wall_type);
                         match wall_type {
                             WallType::Allowed | WallType::Pocket => {
                                 continue 'inner;
@@ -1722,14 +1741,81 @@ impl OpenRoutes {
                             }
                         };
                     }
-                    current_distance_to_finish = distances_to_finish[next].unwrap();
-                    current = next;
-                    to_return.push(next);
+                    println!("OPEN");
+                    let mut next_steps = steps.clone();
+                    next_steps.push(next);
+                    best_to_explore.push((next_steps.len(), next_steps, next));
+                    walked_to[next] = true;
                     made_step = true;
-                    break 'inner;
                 }
             }
+            if !made_step {
+                finished_paths.push(steps);
+            }
         }
+        let mut longest_path = vec![];
+        for path in finished_paths {
+            if path.len() >= longest_path.len() {
+                longest_path = path;
+            }
+        }
+        longest_path
+    }
+    // Takes all the steps for this pawn along the shortest path, as long as the path can never be blocked off.
+    // Returns the number of steps taken and the new position
+    // Contains an error currently. If we walk are in tunnel, but back is till open, it will take one step forward.
+    // TODO: WHAT TO DO IF THERE ARE 2 STEPS THAT ARE NOT BLOCKED? We will have to explore both of them I Guess?
+    pub fn pawn_walk_unhindered(
+        &self,
+        pawn: Pawn,
+        allowed_walls: &AllowedWalls,
+        distances_to_finish: &DistancesToFinish,
+    ) -> Option<(Vec<Position>, [[Option<i8>; 9]; 9])> {
+        let mut to_return =
+            self.furthest_walkable_unhindered(pawn, allowed_walls, distances_to_finish);
+        //        let mut current_distance_to_finish = distances_to_finish[pawn.position].unwrap();
+        //        let mut current = pawn.position;
+        //        let mut to_return = vec![pawn.position];
+        //        let mut made_step = true;
+        //        while made_step {
+        //            made_step = false;
+        //            'inner: for pawn_move in PAWN_MOVES_DOWN_LAST {
+        //                if self.is_open(current, pawn_move) {
+        //                    let next = current.add_move(pawn_move);
+        //                    if distances_to_finish[next].unwrap() >= current_distance_to_finish {
+        //                        continue 'inner;
+        //                    }
+        //                    // If a wall can be placed, we break the loop.
+        //                    for relevant_walls in current.relevant_walls(pawn_move) {
+        //                        let wall_type = allowed_walls[relevant_walls];
+        //                        match wall_type {
+        //                            WallType::Allowed | WallType::Pocket => {
+        //                                continue 'inner;
+        //                            }
+        //                            WallType::Impossible => (),
+        //                            WallType::Unallowed => {
+        //                                let mut pawn = pawn;
+        //                                pawn.position = current;
+        //                                let mut open_routes = self.clone();
+        //                                open_routes.update_open(relevant_walls.0, relevant_walls.1);
+        //                                if open_routes
+        //                                    .find_path_for_pawn_to_dest_row(pawn, false)
+        //                                    .is_some()
+        //                                {
+        //                                    // wall  still not allowed
+        //                                    continue 'inner;
+        //                                }
+        //                            }
+        //                        };
+        //                    }
+        //                    current_distance_to_finish = distances_to_finish[next].unwrap();
+        //                    current = next;
+        //                    to_return.push(next);
+        //                    made_step = true;
+        //                    break 'inner;
+        //                }
+        //            }
+        //        }
         if to_return.len() == 1 {
             return None;
         }
@@ -1748,7 +1834,7 @@ impl OpenRoutes {
                 [*previous_pos; MAX_LINE_LENGTH],
                 pawn,
                 first_move,
-                distances_to_finish,
+                &distances_to_finish.dist,
             ) {
                 PocketCheckResponse::NoPocket(_) => (),
                 PocketCheckResponse::Pocket(pocket_resp) => {
@@ -4948,6 +5034,13 @@ mod test {
             NextMovesCache::new(&board, 1),
         ];
         println!("from scratchtook: {:?}", start.elapsed());
+        let longest_route = board.open_routes.furthest_walkable_unhindered(
+            board.pawns[1],
+            &proper_cache[1].allowed_walls_for_pawn,
+            &proper_cache[1].distances_to_finish,
+        );
+        println!("LONGEST ROUTE: {:?}", longest_route);
+        //panic!("STOP HERE FOR NOW");
 
         let next_moves =
             board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &proper_cache);
@@ -4962,6 +5055,10 @@ mod test {
                 cache[0].next_cache(prev_move, &prev_board, &board, 0),
                 cache[1].next_cache(prev_move, &prev_board, &board, 1),
             ];
+            if prev_move == Move::PawnMove(PawnMove::Left, None) {
+                // This is a weird scenario, The pawn walks back towards an area that is excluded, but still nice to get it right
+                //continue;
+            }
 
             println!("{} {:?}", prev_board.encode(), prev_move);
             println!(

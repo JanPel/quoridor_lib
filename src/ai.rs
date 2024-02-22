@@ -1145,8 +1145,13 @@ pub fn recursive_monte_carlo(
                                 calc_cache.get_cache(&board, *cache_index);
                             *cache_index = new_cache_index;
                             let next_moves =
-                                &board.next_moves_with_scoring(true, small_rng, &next_moves_cache)
-                                    [move_options.as_ref().unwrap().len()..];
+                                board.next_moves_with_scoring(true, small_rng, &next_moves_cache);
+                            // TEMP FIX WHILE WE FIX THE OTHER BUG
+                            if next_moves.len() <= move_options.as_ref().unwrap().len() {
+                                *scores_included = -1;
+                                continue;
+                            }
+                            let next_moves = &next_moves[move_options.as_ref().unwrap().len()..];
                             move_options
                                 .as_mut()
                                 .unwrap()
