@@ -3,7 +3,6 @@ mod walls;
 
 use std::char::MAX;
 use std::collections::VecDeque;
-use std::intrinsics::atomic_cxchg_seqcst_acquire;
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -2747,6 +2746,7 @@ impl Board {
                         }
                     }
                 }
+                next_moves.sort_by_key(|x| -x.1);
                 return next_moves;
             }
         }
@@ -2811,6 +2811,49 @@ impl Board {
             }
         }
         next_moves
+    }
+
+    pub fn previous_boards(&self) -> Vec<(Board, Move)> {
+        let mut walls = vec![];
+        for row in 0..8 {
+            for col in 0..8 {
+                let pos = Position { row, col };
+                if self.walls.horizontal[pos] {
+                    walls.push((WallDirection::Horizontal, pos));
+                }
+                if self.walls.vertical[pos] {
+                    walls.push((WallDirection::Vertical, pos));
+                }
+            }
+        }
+        let mut prev_boards = vec![];
+        for wall in walls {
+            let mut prev_board = self.clone();
+            prev_board.turn -= 1;
+            prev_board.walls.wall_not_allowed(wall.0, wall.1);
+            prev_board.pawns[prev_board.turn % 2].number_of_walls_left += 1;
+            prev_boards.push((
+                Board::decode(&prev_board.encode()).unwrap(),
+                Move::Wall(wall.0, wall.1),
+            ));
+        }
+
+        let mut prev_board = self.clone();
+        prev_board.turn -= 1;
+        for pawn_move in prev_board.next_pawn_moves() {
+            prev_board = prev_board.clone();
+            prev_board.move_pawn(pawn_move.0);
+            prev_board.turn -= 1;
+            prev_boards.push((
+                Board::decode(&prev_board.encode()).unwrap(),
+                Move::PawnMove(
+                    pawn_move.0 .0.opposite_move(),
+                    pawn_move.0 .1.map(|x| x.opposite_move()),
+                ),
+            ));
+        }
+
+        prev_boards
     }
 
     pub fn game_move_possible(&self, game_move: Move) -> MoveResult {
@@ -4814,6 +4857,7 @@ mod test {
 
         // previous board: 10;5E4;5E6;D1v;D2h;C3v;D3h;E5v, next_board: 11;4E4;5E6;D1v;D2h;C3v;D3h;E5v;D6h, game_move:
     }
+
     #[test]
     fn test_only_bad_pawn_moves() {
         let board = Board::decode(
@@ -4832,4 +4876,112 @@ mod test {
         println!("{:?}", next_moves);
         assert!(next_moves.into_iter().filter(|x| x.1 >= 0).count() >= 1);
     }
+
+    fn compare_cache(
+        previous_move_cache: [NextMovesCache; 2],
+        next_cache: [NextMovesCache; 2],
+        board: &Board,
+        next_board: &Board,
+        next_move: Move,
+    ) {
+        for i in 0..2 {
+            assert_eq!(
+                previous_move_cache[i].distances_to_finish,
+                next_cache[i].distances_to_finish,
+            );
+            if previous_move_cache[i].allowed_walls_for_pawn != next_cache[i].allowed_walls_for_pawn
+            {
+                println!(
+                    "allowed walls for pawn {}: {:?} are different",
+                    i, next_board.pawns[i]
+                );
+                println!("previous_cache");
+                previous_move_cache[i]
+                    .allowed_walls_for_pawn
+                    .pretty_print_wall();
+                println!("new cache");
+                next_cache[i].allowed_walls_for_pawn.pretty_print_wall();
+
+                println!("walls");
+                board.walls.pretty_print_wall();
+            }
+            assert_eq!(
+                previous_move_cache[i].allowed_walls_for_pawn,
+                next_cache[i].allowed_walls_for_pawn,
+            );
+            if previous_move_cache[i].relevant_squares != next_cache[i].relevant_squares {
+                println!(
+                    "allowed walls for pawn {}: {:?} are different",
+                    i, next_board.pawns[i]
+                );
+                println!("previous_cache");
+                previous_move_cache[i].relevant_squares.pretty_print();
+                println!("new cache");
+                next_cache[i].relevant_squares.pretty_print();
+
+                println!("walls");
+                board.walls.pretty_print_wall();
+            }
+
+            previous_move_cache[i].relevant_squares.pretty_print();
+
+            next_cache[i].relevant_squares.pretty_print();
+            println!("{}, move was {:?}", board.encode(), next_move);
+            assert_eq!(
+                previous_move_cache[i].relevant_squares,
+                next_cache[i].relevant_squares,
+            );
+        }
+    }
+    // Need a way to get to previous board
+    #[test]
+    fn test_board_with_cache_error() {
+        // 29;1E5;0H7;F1v;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h Seems to be previous board
+        let board = Board::decode(
+            "30;1E5;0G6;F1v;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h",
+        )
+        .unwrap();
+
+        let start = Instant::now();
+        let proper_cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        println!("from scratchtook: {:?}", start.elapsed());
+
+        let next_moves =
+            board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &proper_cache);
+        println!("{:?}", next_moves);
+        assert!(next_moves.into_iter().filter(|x| x.1 >= 0).count() >= 1);
+        for (prev_board, prev_move) in board.previous_boards() {
+            let cache = [
+                NextMovesCache::new(&prev_board, 0),
+                NextMovesCache::new(&prev_board, 1),
+            ];
+            let prev_cache = [
+                cache[0].next_cache(prev_move, &prev_board, &board, 0),
+                cache[1].next_cache(prev_move, &prev_board, &board, 1),
+            ];
+
+            println!("{} {:?}", prev_board.encode(), prev_move);
+            println!(
+                "prev board moves: {:?}",
+                prev_board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &cache)
+            );
+            let next_moves_proper =
+                board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &proper_cache);
+            println!("PROPER CACHE: {:?}", next_moves_proper);
+            let next_moves_prev =
+                board.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &prev_cache);
+            println!("PREV CACHE: {:?}", next_moves_prev);
+            println!("PRETTY PRINTING RELEVANT SQUARES PAWN 1 OLD BOARD");
+            cache[1].relevant_squares.pretty_print();
+            //assert_eq!(next_moves_proper, next_moves_prev);
+
+            compare_cache(proper_cache, prev_cache, &prev_board, &board, prev_move);
+        }
+    }
+    //
+    //"29;1E5;1G6;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h",F1v,
+    //"29;1E5;1G6;F1v;H2v;B3h;D3h;E3v;F3v;H3h;C4v;F4h;E5v;F5v;G5h;C6v;E6h;H6v;D7h;F7h;F8v;G8h",
 }

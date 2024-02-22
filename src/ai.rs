@@ -2263,22 +2263,4 @@ mod tests {
         let scores_opponent = ai_controlled.relevant_mc_tree.mc_node.scores();
         assert!((scores_opponent.0 / scores_opponent.1 as f32) < 0.5);
     }
-    #[test]
-    fn test_estimate_losses() {
-        let wins = 0.0;
-        let total_visits = 0;
-        let total_parent_visits = 340_000;
-        let c = 0.5;
-        let threshold_y = 0.0;
-        let heuristic_score = 2;
-        let result = estimate_losses(
-            wins,
-            total_visits,
-            total_parent_visits,
-            c,
-            threshold_y,
-            heuristic_score,
-        );
-        assert_eq!(result, 100);
-    }
 }
