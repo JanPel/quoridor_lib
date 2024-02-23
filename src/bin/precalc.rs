@@ -17,7 +17,8 @@ fn remove_known_moves_for_precalc(
     to_remove: &Vec<Move>,
 ) {
     println!(
-        "REMOVING KNOWN MOVES: OLD MOVES AMOUNT IS: {}",
+        "Board: {} REMOVING KNOWN MOVES: OLD MOVES AMOUNT IS: {}",
+        current_board.encode(),
         mc_ref.move_options().unwrap().len()
     );
     mc_ref.move_options().unwrap().retain(|game_move| {
@@ -26,7 +27,8 @@ fn remove_known_moves_for_precalc(
         pre_calc.roll_out_score(&next_board).is_none() && !to_remove.contains(&game_move.0)
     });
     println!(
-        "AFTER REMOVING KNOWN MOVES: NEW MOVES AMOUNT IS: {}",
+        "Board: {}, AFTER REMOVING KNOWN MOVES: NEW MOVES AMOUNT IS: {}",
+        current_board.encode(),
         mc_ref.move_options().unwrap().len()
     );
     // Update the scores of the current node to be equal to tath of the next_moves scores summed
@@ -99,9 +101,26 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
         &vec![],
     );
     let visits_after_removal = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
-    println!("VISITS BEFORE REMOVAL: {}", original_visits);
-    println!("VISITS AFTER REMOVAL: {}", visits_after_removal);
-    if visits_after_removal > 200_000_000.0 {
+    println!(
+        "Board: {} VISITS BEFORE REMOVAL: {}",
+        board.encode(),
+        original_visits
+    );
+    println!(
+        "Board: {} VISITS AFTER REMOVAL: {}",
+        board.encode(),
+        visits_after_removal
+    );
+    // WIN RATE CURRENT PLAYER
+    let score_player_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
+    let score_current_player = if ai_board.board.turn % 2 == 0 {
+        score_player_zero
+    } else {
+        1.0 - score_player_zero
+    };
+
+    // If the win rate for the current player is bigger then 0.62, then we don't need to recalculate cause we already know of a very good alternative.
+    if visits_after_removal > 200_000_000.0 || score_current_player > 0.64 {
         // We don't need to recalculate this node
         let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
         precalc.insert_result(board, new_score_zero);
@@ -182,7 +201,6 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
                 known_calc.board.encode()
             ));
         }
-
     }
     pre_calculate_board(board_to_calc, precalc);
 }
@@ -192,7 +210,7 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
     let mut best_moves = {
         let mut board = AIControlledBoard::from_board(board.clone());
         // First we prepopulate the board.
-        for i in 0..3 {
+        for _ in 0..3 {
             board
                 .relevant_mc_tree
                 .decide_move_mc(
@@ -215,8 +233,7 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
             &vec![],
         );
 
-        let simulations_per_step = 100_000_000;
-        let mut total_simulations = simulations_per_step;
+        let total_simulations = 100_000_000;
         board
             .relevant_mc_tree
             .decide_move_mc(
@@ -233,7 +250,7 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
             .unwrap();
 
         // Now we will find the 10 nodes with the best score
-        let mut best_moves: Vec<_> = board
+        let best_moves: Vec<_> = board
             .relevant_mc_tree
             .mc_node
             .move_options()
@@ -247,7 +264,7 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
     // Sort by the win rate
     best_moves.sort_by_key(|x| (-(x.1 .0 / x.1 .1 as f32) * 10000.0) as i32);
     // Now we take the best 9 moves
-    println!("THE BEST MOVES ARE: ");
+    println!("For board: {}, THE BEST MOVES ARE: ", board.encode());
     best_moves = best_moves.into_iter().take(7).collect();
     for game_move in &best_moves {
         println!(
@@ -304,7 +321,7 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
                 &to_exclude,
             );
         }
-        board
+        let suggested_move = board
             .relevant_mc_tree
             .decide_move_mc(
                 board.board.clone(),
@@ -321,8 +338,11 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
 
         total_simulations += simulations_per_step;
         println!(
-            "--------------------- USING {:.4} % BYTES",
-            get_current_process_vms() * 100.0
+            "For Board {} best move is {:?}, with win_rate {} %, and visits: {}",
+            board.board.encode(),
+            suggested_move.0,
+            suggested_move.1 .0 / suggested_move.1 .1 as f32 * 100.0,
+            suggested_move.1 .1
         );
         if get_current_process_vms() > 0.91 {
             println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");
@@ -330,7 +350,6 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
         }
         // Every Million steps we prune
         if i % 25 == 0 {
-            let start = Instant::now();
             let visit_count = board
                 .relevant_mc_tree
                 .last_visit_count
@@ -349,7 +368,6 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
                     false,
                 );
             }
-            println!("Time to prune TREE is: {:?}", start.elapsed());
         }
     }
     prune_nodes(
