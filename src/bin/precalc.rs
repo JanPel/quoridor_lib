@@ -118,9 +118,14 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
     } else {
         1.0 - score_player_zero
     };
+    println!(
+        "Board: {} WIN RATE PLAYER ZERO: {}",
+        board.encode(),
+        score_player_zero
+    );
 
     // If the win rate for the current player is bigger then 0.62, then we don't need to recalculate cause we already know of a very good alternative.
-    if visits_after_removal > 200_000_000.0 || score_current_player > 0.64 {
+    if visits_after_removal > 200_000_000.0 || score_current_player > 0.62 {
         // We don't need to recalculate this node
         let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
         precalc.insert_result(board, new_score_zero);
@@ -344,7 +349,7 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
             suggested_move.1 .0 / suggested_move.1 .1 as f32 * 100.0,
             suggested_move.1 .1
         );
-        if get_current_process_vms() > 0.91 {
+        if get_current_process_vms() > 0.97 {
             println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");
             break;
         }
