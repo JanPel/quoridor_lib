@@ -370,11 +370,6 @@ impl MonteCarloTree {
                 self.last_visit_count.clone(),
                 &pre_calc,
             );
-            if res.last_visit_count >= 10_000_000 {
-                let start = Instant::now();
-
-                println!("Pruning nodes, took {:?}", start.elapsed());
-            }
             println!("Deciding On move took: {:?}", start.elapsed());
         }
         //println!("{:?}", timings);
@@ -618,6 +613,8 @@ pub fn multithreaded_mc(
             number_of_loops / number_threads,
             explore_constant,
         );
+
+        let mut total_res = total_res;
         if let Some((best_move, best_mc, number_of_threads_to_best)) = best_option {
             let mut next_board = board.clone();
             next_board.game_move(best_move);
@@ -628,8 +625,9 @@ pub fn multithreaded_mc(
             //);
             let mut calc_cache = calc_cache.clone();
             let last_visit_count = last_visit_count.clone();
-            handles.push(s.spawn(move || {
-                multithreaded_mc(
+            if number_of_threads_to_best == number_threads {
+                // In this case we don't want to spawn another thread (cause that is unnecessary overhead)
+                let res = multithreaded_mc(
                     next_board,
                     best_mc,
                     number_of_threads_to_best,
@@ -645,10 +643,32 @@ pub fn multithreaded_mc(
                     &mut calc_cache,
                     last_visit_count,
                     precalc,
-                )
-            }));
+                );
+                total_res.game_count += res.game_count;
+                total_res.score_zero += res.score_zero;
+                total_res.last_visit_count = total_res.last_visit_count.max(res.last_visit_count);
+            } else {
+                handles.push(s.spawn(move || {
+                    multithreaded_mc(
+                        next_board,
+                        best_mc,
+                        number_of_threads_to_best,
+                        number_of_loops,
+                        small_rng,
+                        depth + 1,
+                        wall_value,
+                        explore_constant,
+                        new_logic,
+                        timings,
+                        roll_out_new,
+                        number_of_averages,
+                        &mut calc_cache,
+                        last_visit_count,
+                        precalc,
+                    )
+                }));
+            }
         };
-        let mut total_res = total_res;
         for moves in split_moves {
             let board = board.clone();
             let mut calc_cache = calc_cache.clone();

@@ -559,10 +559,15 @@ fn main() {
     //precalc_next_step(0, start_board);
     //let start_board = Board::decode("10;9E5;8E6;D3h;D7h;F7h").unwrap();
     //precalc_next_step(0, start_board);
+    
+    // TODO: Think about how to use cpu's more effectively (by avoiding waiting when one precalc is done?) 
+    // We could make something like a work queu? But how to add to queu when calculations are still busy?
+    // We could start from different start boards, and then per board add things onto the queu. Good project for Monday Maybe? 
+    // Then storing PreCalc needs to be synchronized as well....
 
     let start_board_basic = Board::decode("7;9E4;10E6;D3h").unwrap();
-
-    let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
+    //let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
+    let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
     loop {
         precalc_next_step(0, start_board_further.clone());
         precalc_next_step(1, start_board_basic.clone());
