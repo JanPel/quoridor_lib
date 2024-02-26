@@ -1,4 +1,3 @@
-use core::num;
 use rand::prelude::IteratorRandom;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -13,11 +12,10 @@ use std::time::Instant;
 use web_time::Instant;
 
 use crate::board::*;
-use crate::move_stats::{self, MoveStats, PreCalc};
+use crate::move_stats::PreCalc;
 
 const VISIT_LIMIT: u32 = 3_500_000_000;
 
-const PRECALC_FILE: &str = "./split_up_pre_calcs/:e2:e8:e3:e7:e4:e6:d3h:c6h/to_precalc.json";
 const PRECALC_FOLDER: &str = "./precalc";
 
 // This is the struct we will use to cache moves, the values are the best move from that board, and how strong the that calculated it was.
@@ -370,7 +368,6 @@ impl MonteCarloTree {
                 self.last_visit_count.clone(),
                 &pre_calc,
             );
-            println!("Deciding On move took: {:?}", start.elapsed());
         }
         //println!("{:?}", timings);
         let move_options = self
@@ -437,12 +434,6 @@ impl MonteCarloTree {
                 self.last_visit_count.clone(),
                 &pre_calc,
             );
-            if res.last_visit_count >= 10_000_000 {
-                let start = Instant::now();
-
-                println!("Pruning nodes, took {:?}", start.elapsed());
-            }
-            println!("Deciding On move took: {:?}", start.elapsed());
         }
         //println!("{:?}", timings);
         let move_options = self

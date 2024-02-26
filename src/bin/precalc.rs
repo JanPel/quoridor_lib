@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rand::rngs::SmallRng;
@@ -90,14 +91,15 @@ fn get_current_process_vms() -> f64 {
 
 // Returns whether it has changed
 // If the win rate has not changed we can stop updating
-fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
-    let old_win_rate_zero = precalc.roll_out_score(board).map_or(0.0, |x| x);
+fn update_win_rate(board: &Board, precalc: Arc<Mutex<PreCalc>>) -> Option<bool> {
+    let precalc_loc = precalc.lock().unwrap().clone();
+    let old_win_rate_zero = precalc_loc.roll_out_score(board).map_or(0.0, |x| x);
     let mut ai_board = AIControlledBoard::decode(&board.encode()).unwrap();
     let original_visits = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
     remove_known_moves_for_precalc(
         &mut ai_board.relevant_mc_tree.mc_node,
         board,
-        precalc,
+        &precalc_loc,
         &vec![],
     );
     let visits_after_removal = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
@@ -112,7 +114,9 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
         visits_after_removal
     );
     // WIN RATE CURRENT PLAYER
-    let score_player_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
+    let score_player_zero = ai_board
+        .relevant_mc_tree
+        .score_for_zero(board, &precalc_loc);
     let score_current_player = if ai_board.board.turn % 2 == 0 {
         score_player_zero
     } else {
@@ -127,8 +131,10 @@ fn update_win_rate(board: &Board, precalc: &mut PreCalc) -> Option<bool> {
     // If the win rate for the current player is bigger then 0.62, then we don't need to recalculate cause we already know of a very good alternative.
     if visits_after_removal > 200_000_000.0 || score_current_player > 0.62 {
         // We don't need to recalculate this node
-        let new_score_zero = ai_board.relevant_mc_tree.score_for_zero(board, precalc);
-        precalc.insert_result(board, new_score_zero);
+        let new_score_zero = ai_board
+            .relevant_mc_tree
+            .score_for_zero(board, &precalc_loc);
+        precalc.lock().unwrap().insert_result(board, new_score_zero);
         // We will store node with the next step removed.
         ai_board.relevant_mc_tree.serialize_to_file(&format!(
             "{}/{}.mc_node",
@@ -173,9 +179,10 @@ fn find_next_board_sequence(
     (board_sequence, ai_controlled_board)
 }
 
-fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &mut PreCalc) {
+fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: Arc<Mutex<PreCalc>>) {
     let board_to_calc = known_calc.board.clone();
-    let ai_move_from_known_calc = known_calc.ai_move(100, precalc);
+    let precalc_local = precalc.lock().unwrap().clone();
+    let ai_move_from_known_calc = known_calc.ai_move(100, &precalc_local);
     let number_visits_best_move = ai_move_from_known_calc.2;
     if number_visits_best_move >= 200_000_000
         // Not a known node
@@ -194,12 +201,15 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
                 known_calc.relevant_mc_tree.mc_node.number_visits(),
                 known_calc
                     .relevant_mc_tree
-                    .score_for_zero(&known_calc.board, precalc)
+                    .score_for_zero(&known_calc.board, &precalc_local)
             );
             let new_score_zero = known_calc
                 .relevant_mc_tree
-                .score_for_zero(&known_calc.board, precalc);
-            precalc.insert_result(&known_calc.board, new_score_zero);
+                .score_for_zero(&known_calc.board, &precalc_local);
+            precalc
+                .lock()
+                .unwrap()
+                .insert_result(&known_calc.board, new_score_zero);
             known_calc.relevant_mc_tree.serialize_to_file(&format!(
                 "{}/{}.mc_node",
                 PRECALC_FOLDER,
@@ -211,7 +221,8 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: &m
 }
 // We do a new strategy for precalculating.
 // First we we will use all our cores to run for 100 million steps. Then we expand the 10 best moves and run for 250 million steps per move
-fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
+fn pre_calculate_board(board: Board, precalc: Arc<Mutex<PreCalc>>) {
+    let precalc_local = precalc.lock().unwrap().clone();
     let mut best_moves = {
         let mut board = AIControlledBoard::from_board(board.clone());
         // First we prepopulate the board.
@@ -227,14 +238,14 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
                     true,
                     true,
                     100,
-                    &precalc,
+                    &precalc_local,
                 )
                 .unwrap();
         }
         remove_known_moves_for_precalc(
             &mut board.relevant_mc_tree.mc_node,
             &board.board,
-            &precalc,
+            &precalc_local,
             &vec![],
         );
 
@@ -250,7 +261,7 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
                 true,
                 true,
                 100,
-                &precalc,
+                &precalc_local,
             )
             .unwrap();
 
@@ -280,35 +291,48 @@ fn pre_calculate_board(board: Board, precalc: &mut PreCalc) {
     }
     println!("-------------------------------------");
 
-    std::thread::scope(|s| {
-        let mut handles = vec![];
+    let calc_results = Arc::new(Mutex::new(vec![]));
+    rayon::scope(|s| {
         let board_clone = board.clone();
         let best_moves_clone = best_moves.iter().map(|x| x.0).collect();
-        let precalc_loc = precalc.clone();
-        handles.push(s.spawn(move || {
+        let precalc_loc = precalc_local.clone();
+
+        let calc_results_local = calc_results.clone();
+        s.spawn(move |_| {
             let score =
                 pre_calculate_sub_board(board_clone.clone(), &precalc_loc, best_moves_clone);
-            (board_clone, score)
-        }));
+            calc_results_local
+                .lock()
+                .unwrap()
+                .push((board_clone, score));
+        });
 
         for (move_option, _) in best_moves {
             let mut new_board = board.clone();
             new_board.game_move(move_option);
-            let precalc = precalc.clone();
-            handles.push(s.spawn(move || {
-                let score = pre_calculate_sub_board(new_board.clone(), &precalc, vec![]);
-                (new_board, score)
-            }));
+            let precalc_local = precalc_local.clone();
+
+            let calc_results_local = calc_results.clone();
+            s.spawn(move |_| {
+                let score = pre_calculate_sub_board(new_board.clone(), &precalc_local, vec![]);
+
+                calc_results_local.lock().unwrap().push((new_board, score));
+            });
         }
-        for handle in handles {
-            let (new_board, score) = handle.join().unwrap();
-            precalc.insert_result(&new_board, score);
-        }
+        //for handle in handles {
+        //    let (new_board, score) = handle.join().unwrap();
+        //    precalc.insert_result(&new_board, score);
+        //}
     });
-    update_win_rate(&board, precalc);
-    //let board_score = pre_calculate_sub_board(board.clone(), precalc, vec![]);
-    //precalc.insert_result(&board, board_score);
-    precalc.store(PRECALC_FILE);
+    {
+        for (new_board, score) in calc_results.lock().unwrap().iter() {
+            precalc.lock().unwrap().insert_result(&new_board, *score);
+        }
+        update_win_rate(&board, precalc.clone());
+        //let board_score = pre_calculate_sub_board(board.clone(), precalc, vec![]);
+        //precalc.insert_result(&board, board_score);
+        precalc.lock().unwrap().store(PRECALC_FILE);
+    }
 }
 
 fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move>) -> f32 {
@@ -393,29 +417,37 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
     new_score_zero
 }
 
-fn precalc_next_step(ai_player: usize, start_board: Board) {
+fn precalc_next_step(ai_player: usize, start_board: Board, precalc: Arc<Mutex<PreCalc>>) {
     let (board_sequence, last_board) = find_next_board_sequence(ai_player, start_board);
 
     println!("GOING TO CALCULATE THE FOLLOWING BOARD SEQUENCE");
     for board in &board_sequence {
         println!("{}", board.encode());
     }
-    let mut precalc = PreCalc::load(PRECALC_FILE).unwrap();
-    pre_calculate_board_with_cache(last_board, &mut precalc);
-    precalc.store(PRECALC_FILE);
+    pre_calculate_board_with_cache(last_board, precalc.clone());
+    {
+        let precalc = precalc.lock().unwrap();
+        precalc.store(PRECALC_FILE);
+    }
 
     for board in board_sequence.into_iter().rev().skip(1) {
-        if let Some(changed) = update_win_rate(&board, &mut precalc) {
+        if let Some(changed) = update_win_rate(&board, precalc.clone()) {
             if !changed {
                 break;
             }
         } else {
             // Now we calculate the board really deeply again;
-            pre_calculate_board(board, &mut precalc);
+            pre_calculate_board(board, precalc.clone());
         }
+        {
+            let precalc = precalc.lock().unwrap();
+            precalc.store(PRECALC_FILE);
+        }
+    }
+    {
+        let precalc = precalc.lock().unwrap();
         precalc.store(PRECALC_FILE);
     }
-    precalc.store(PRECALC_FILE);
 }
 
 //fn main() {
@@ -549,6 +581,10 @@ fn precalc_next_step(ai_player: usize, start_board: Board) {
 //}
 
 fn main() {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(10)
+        .build_global()
+        .unwrap();
     //let start_board = Board::decode("13;7E5;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
     //precalc_next_step(0, start_board);
     //let start_board = Board::decode("12;7E4;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
@@ -559,18 +595,27 @@ fn main() {
     //precalc_next_step(0, start_board);
     //let start_board = Board::decode("10;9E5;8E6;D3h;D7h;F7h").unwrap();
     //precalc_next_step(0, start_board);
-    
-    // TODO: Think about how to use cpu's more effectively (by avoiding waiting when one precalc is done?) 
+
+    // TODO: Think about how to use cpu's more effectively (by avoiding waiting when one precalc is done?)
     // We could make something like a work queu? But how to add to queu when calculations are still busy?
-    // We could start from different start boards, and then per board add things onto the queu. Good project for Monday Maybe? 
+    // We could start from different start boards, and then per board add things onto the queu. Good project for Monday Maybe?
     // Then storing PreCalc needs to be synchronized as well....
 
+    let precalc = Arc::new(Mutex::new(PreCalc::load(PRECALC_FILE).unwrap()));
     let start_board_basic = Board::decode("7;9E4;10E6;D3h").unwrap();
-    //let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
-    let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
+    let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
+    //let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
+
+    let parrallel_board = Board::decode("6;10E4;9E7;D4v").unwrap();
+
+    let precalc_parrallel = precalc.clone();
+    // We want to calculate a board in parrallel
+    std::thread::spawn(move || loop {
+        precalc_next_step(0, parrallel_board.clone(), precalc_parrallel.clone());
+    });
     loop {
-        precalc_next_step(0, start_board_further.clone());
-        precalc_next_step(1, start_board_basic.clone());
+        precalc_next_step(0, start_board_further.clone(), precalc.clone());
+        precalc_next_step(1, start_board_basic.clone(), precalc.clone());
     }
 }
 
@@ -580,6 +625,7 @@ mod tests {
 
     #[test]
     fn test_find_next_board_sequence() {
+        let precalc = Arc::new(Mutex::new(PreCalc::load(PRECALC_FILE).unwrap()));
         let start_board = Board::decode("7;9E4;10E6;D3h").unwrap();
         // FOR PLAYER 0
         let (board_sequence, last_board) = find_next_board_sequence(0, start_board.clone());
@@ -601,13 +647,13 @@ mod tests {
             last_board.relevant_mc_tree.mc_node.number_visits()
         );
 
-        precalc_next_step(0, start_board.clone());
+        precalc_next_step(0, start_board.clone(), precalc);
     }
 
     #[test]
     fn test_update_win_rate() {
+        let precalc = Arc::new(Mutex::new(PreCalc::load(PRECALC_FILE).unwrap()));
         let board = Board::decode("7;9E4;10E6;D3h").unwrap();
-        let mut precalc = PreCalc::load(PRECALC_FILE).unwrap();
-        update_win_rate(&board, &mut precalc);
+        update_win_rate(&board, precalc);
     }
 }
