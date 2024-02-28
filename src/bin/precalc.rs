@@ -11,6 +11,50 @@ use quoridor::*;
 const PRECALC_FILE: &str = "./to_precalc.json";
 const PRECALC_FOLDER: &str = "./precalc";
 
+static NUMBER_PARELLEL_PRECALC: AtomicU32 = AtomicU32::new(0);
+const MAX_PARALLEL_PRECALC: u32 = 10;
+
+fn spawn_when_room<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> std::thread::JoinHandle<T> {
+    println!(
+        "ATTEMPTING TO SPAWN NEW FUNCTION, NUMBER OF THREADS: {}",
+        NUMBER_PARELLEL_PRECALC.load(Ordering::Acquire)
+    );
+    loop {
+        // Attempt to atomically increment the counter if it's below the max
+        let current_count = NUMBER_PARELLEL_PRECALC.load(Ordering::Acquire);
+        if current_count < MAX_PARALLEL_PRECALC {
+            // Attempt to increment if current_count is still valid
+            if NUMBER_PARELLEL_PRECALC
+                .compare_exchange(
+                    current_count,
+                    current_count + 1,
+                    Ordering::Release,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                break; // Exit the function after spawning the thread
+            }
+        }
+        // If we reach here, it means we couldn't increment because we're at max capacity; wait before trying again
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+    std::thread::spawn(move || {
+        let res = f();
+        NUMBER_PARELLEL_PRECALC.fetch_sub(1, Ordering::Relaxed);
+        println!(
+            "FINISHED SPAWNING NEW FUNCTION, NUMBER OF THREADS: {}",
+            NUMBER_PARELLEL_PRECALC.load(Ordering::Relaxed)
+        );
+        res
+    })
+}
+
+// We want to spawn the thread once there is room. So every ten seconds we check the static VARIABLE NUMBER_PARRELLEL_PRECALC to see if it is < 10,
+// if it is we spawn a new thread. Else we wait another 10 seconds. We want to atomically
+
 fn remove_known_moves_for_precalc(
     mc_ref: &mut MCNode,
     current_board: &Board,
@@ -291,48 +335,38 @@ fn pre_calculate_board(board: Board, precalc: Arc<Mutex<PreCalc>>) {
     }
     println!("-------------------------------------");
 
-    let calc_results = Arc::new(Mutex::new(vec![]));
-    rayon::scope(|s| {
-        let board_clone = board.clone();
-        let best_moves_clone = best_moves.iter().map(|x| x.0).collect();
-        let precalc_loc = precalc_local.clone();
+    let board_clone = board.clone();
+    let best_moves_clone = best_moves.iter().map(|x| x.0).collect();
+    let precalc_loc = precalc_local.clone();
 
-        let calc_results_local = calc_results.clone();
-        s.spawn(move |_| {
-            let score =
-                pre_calculate_sub_board(board_clone.clone(), &precalc_loc, best_moves_clone);
-            calc_results_local
-                .lock()
-                .unwrap()
-                .push((board_clone, score));
-        });
-
-        for (move_option, _) in best_moves {
-            let mut new_board = board.clone();
-            new_board.game_move(move_option);
-            let precalc_local = precalc_local.clone();
-
-            let calc_results_local = calc_results.clone();
-            s.spawn(move |_| {
-                let score = pre_calculate_sub_board(new_board.clone(), &precalc_local, vec![]);
-
-                calc_results_local.lock().unwrap().push((new_board, score));
-            });
-        }
-        //for handle in handles {
-        //    let (new_board, score) = handle.join().unwrap();
-        //    precalc.insert_result(&new_board, score);
-        //}
+    let mut handles = vec![];
+    //let calc_results_local = calc_results.clone();
+    let handle = spawn_when_room(move || {
+        let score = pre_calculate_sub_board(board_clone.clone(), &precalc_loc, best_moves_clone);
+        (board_clone, score)
     });
-    {
-        for (new_board, score) in calc_results.lock().unwrap().iter() {
-            precalc.lock().unwrap().insert_result(&new_board, *score);
-        }
-        update_win_rate(&board, precalc.clone());
-        //let board_score = pre_calculate_sub_board(board.clone(), precalc, vec![]);
-        //precalc.insert_result(&board, board_score);
-        precalc.lock().unwrap().store(PRECALC_FILE);
+    handles.push(handle);
+
+    for (move_option, _) in best_moves {
+        let mut new_board = board.clone();
+        new_board.game_move(move_option);
+        let precalc_local = precalc_local.clone();
+
+        //let calc_results_local = calc_results.clone();
+        handles.push(spawn_when_room(move || {
+            let score = pre_calculate_sub_board(new_board.clone(), &precalc_local, vec![]);
+            (new_board, score)
+        }));
     }
+
+    for handle in handles {
+        let (new_board, score) = handle.join().unwrap();
+        precalc.lock().unwrap().insert_result(&new_board, score);
+    }
+    update_win_rate(&board, precalc.clone());
+    //let board_score = pre_calculate_sub_board(board.clone(), precalc, vec![]);
+    //precalc.insert_result(&board, board_score);
+    precalc.lock().unwrap().store(PRECALC_FILE);
 }
 
 fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move>) -> f32 {
@@ -383,9 +417,9 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
                 .relevant_mc_tree
                 .last_visit_count
                 .fetch_add(0, Ordering::Relaxed);
-            let prune_amount = if get_current_process_vms() > 0.85 {
+            let prune_amount = if get_current_process_vms() > 0.88 {
                 4_000_000
-            } else if get_current_process_vms() > 0.7 {
+            } else if get_current_process_vms() > 0.76 {
                 8_000_000
             } else {
                 20_000_000
@@ -425,10 +459,7 @@ fn precalc_next_step(ai_player: usize, start_board: Board, precalc: Arc<Mutex<Pr
         println!("{}", board.encode());
     }
     pre_calculate_board_with_cache(last_board, precalc.clone());
-    {
-        let precalc = precalc.lock().unwrap();
-        precalc.store(PRECALC_FILE);
-    }
+    precalc.lock().unwrap().store(PRECALC_FILE);
 
     for board in board_sequence.into_iter().rev().skip(1) {
         if let Some(changed) = update_win_rate(&board, precalc.clone()) {
@@ -439,15 +470,9 @@ fn precalc_next_step(ai_player: usize, start_board: Board, precalc: Arc<Mutex<Pr
             // Now we calculate the board really deeply again;
             pre_calculate_board(board, precalc.clone());
         }
-        {
-            let precalc = precalc.lock().unwrap();
-            precalc.store(PRECALC_FILE);
-        }
+        precalc.lock().unwrap().store(PRECALC_FILE);
     }
-    {
-        let precalc = precalc.lock().unwrap();
-        precalc.store(PRECALC_FILE);
-    }
+    precalc.lock().unwrap().store(PRECALC_FILE);
 }
 
 //fn main() {
@@ -581,10 +606,6 @@ fn precalc_next_step(ai_player: usize, start_board: Board, precalc: Arc<Mutex<Pr
 //}
 
 fn main() {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(10)
-        .build_global()
-        .unwrap();
     //let start_board = Board::decode("13;7E5;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
     //precalc_next_step(0, start_board);
     //let start_board = Board::decode("12;7E4;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
@@ -603,10 +624,11 @@ fn main() {
 
     let precalc = Arc::new(Mutex::new(PreCalc::load(PRECALC_FILE).unwrap()));
     let start_board_basic = Board::decode("7;9E4;10E6;D3h").unwrap();
-    let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
-    //let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
+    //let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
+    let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
 
-    let parrallel_board = Board::decode("6;10E4;9E7;D4v").unwrap();
+    //let parrallel_board = Board::decode("7;9E4;10E6;C3h").unwrap();
+    let parrallel_board = Board::decode("5;9E3;10E7;D6h").unwrap();
 
     let precalc_parrallel = precalc.clone();
     // We want to calculate a board in parrallel
