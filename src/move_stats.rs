@@ -317,13 +317,13 @@ impl PreCalc {
         self.scores_player_zero.insert(board.encode(), Some(result));
     }
 
-    pub fn roll_out_score(&self, board: &Board) -> Option<f32> {
+    pub fn roll_out_score(&self, board: &Board) -> Option<(f32, bool)> {
         if let Some(score) = self.scores_player_zero.get(&board.encode()) {
-            *score
+            score.map(|x| (x, false))
         } else {
             // We want to encode the mirrored board as well
             if let Some(score) = self.scores_player_zero.get(&board.encode_mirror()) {
-                *score
+                score.map(|x| (x, true))
             } else {
                 None
             }

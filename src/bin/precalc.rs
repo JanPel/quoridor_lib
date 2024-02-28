@@ -137,7 +137,7 @@ fn get_current_process_vms() -> f64 {
 // If the win rate has not changed we can stop updating
 fn update_win_rate(board: &Board, precalc: Arc<Mutex<PreCalc>>) -> Option<bool> {
     let precalc_loc = precalc.lock().unwrap().clone();
-    let old_win_rate_zero = precalc_loc.roll_out_score(board).map_or(0.0, |x| x);
+    let old_win_rate_zero = precalc_loc.roll_out_score(board).map_or(0.0, |x| x.0);
     let mut ai_board = AIControlledBoard::decode(&board.encode()).unwrap();
     let original_visits = ai_board.relevant_mc_tree.mc_node.number_visits() as f32;
     remove_known_moves_for_precalc(
@@ -210,7 +210,13 @@ fn find_next_board_sequence(
         if true {
             // ai_controlled_board.board.turn % 2 == ai_player {
             let ai_move = ai_controlled_board.ai_move(0, &precalc);
-            ai_controlled_board.game_move(ai_move.0);
+            ai_controlled_board.game_move(ai_move.suggested_move);
+
+            if let Some((_, true)) = precalc.roll_out_score(&ai_controlled_board.board) {
+                // We will keep calculating from mirrored board, which is already known
+                ai_controlled_board =
+                    AIControlledBoard::decode(&ai_controlled_board.board.encode_mirror()).unwrap();
+            }
         } else {
             // The non ai player takes a random move among the best moves. (for now we say moves that are in the top 10 visit wise
             // and have a win rate that is at most 5% point below the best win rate)
@@ -227,7 +233,7 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: Ar
     let board_to_calc = known_calc.board.clone();
     let precalc_local = precalc.lock().unwrap().clone();
     let ai_move_from_known_calc = known_calc.ai_move(100, &precalc_local);
-    let number_visits_best_move = ai_move_from_known_calc.2;
+    let number_visits_best_move = ai_move_from_known_calc.number_of_simulations;
     if number_visits_best_move >= 200_000_000
         // Not a known node
         && number_visits_best_move < 250_000_000
@@ -235,7 +241,7 @@ fn pre_calculate_board_with_cache(mut known_calc: AIControlledBoard, precalc: Ar
         && known_calc.relevant_mc_tree.mc_node.number_visits() <= 250_000_000
     {
         // We will insert the best move with its score in precalc and store if.
-        known_calc.game_move(ai_move_from_known_calc.0);
+        known_calc.game_move(ai_move_from_known_calc.suggested_move);
 
         if known_calc.relevant_mc_tree.mc_node.number_visits() > 200_000_000 {
             // We can add this node to the precalc stuff.
@@ -403,9 +409,9 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
         println!(
             "For Board {} best move is {:?}, with win_rate {} %, and visits: {}",
             board.board.encode(),
-            suggested_move.0,
-            suggested_move.1 .0 / suggested_move.1 .1 as f32 * 100.0,
-            suggested_move.1 .1
+            suggested_move.suggested_move,
+            suggested_move.move_score.0 / suggested_move.move_score.1 as f32 * 100.0,
+            suggested_move.move_score.1
         );
         if get_current_process_vms() > 0.97 {
             println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");

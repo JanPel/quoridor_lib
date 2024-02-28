@@ -219,7 +219,7 @@ impl MonteCarloTree {
         for game_move in board.next_non_mirrored_moves() {
             let mut next_board = board.clone();
             next_board.game_move(game_move);
-            if let Some(score_precalc) = pre_calc.roll_out_score(&next_board) {
+            if let Some((score_precalc, mirror_known)) = pre_calc.roll_out_score(&next_board) {
                 let score_for_current_player = if board.turn % 2 == 0 {
                     score_precalc
                 } else {
@@ -277,7 +277,7 @@ impl MonteCarloTree {
         roll_out_new: bool,
         number_of_averages: u32,
         pre_calc: &PreCalc,
-    ) -> Result<(Move, (f32, u32)), Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<DecidedMove, Box<dyn std::error::Error + Sync + Send>> {
         number_of_simulations = number_of_simulations.min(3_500_000_000);
 
         if number_of_simulations >= 1 {
@@ -315,13 +315,16 @@ impl MonteCarloTree {
             log::info!("best precalc alernativie is {:?}", precalc_option);
             if precalc_option.1 >= (best_move.1 .0 / best_move.1 .1 as f32) * 0.98 {
                 log::info!("best precalc alernativie better");
-                return Ok((
-                    precalc_option.0,
-                    (precalc_option.1 * 250_000_000.0, 250_000_000),
-                ));
+                return Ok(DecidedMove {
+                    suggested_move: precalc_option.0,
+                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
+                });
             }
         }
-        Ok(best_move)
+        Ok(DecidedMove {
+            suggested_move: best_move.0,
+            move_score: best_move.1,
+        })
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn decide_move_mc(
@@ -335,7 +338,7 @@ impl MonteCarloTree {
         roll_out_new: bool,
         number_of_averages: u32,
         pre_calc: &PreCalc,
-    ) -> Result<(Move, (f32, u32)), Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<DecidedMove, Box<dyn std::error::Error + Sync + Send>> {
         if number_of_simulations >= self.mc_node.number_visits() {
             if self.mc_node.number_visits() >= VISIT_LIMIT {
                 // We're running too close to the integer limit
@@ -381,13 +384,16 @@ impl MonteCarloTree {
             println!("best precalc alernativie is {:?}", precalc_option);
             if precalc_option.1 > best_move.1 .0 / best_move.1 .1 as f32 {
                 println!("best precalc alernativie better");
-                return Ok((
-                    precalc_option.0,
-                    (precalc_option.1 * 250_000_000.0, 250_000_000),
-                ));
+                return Ok(DecidedMove {
+                    suggested_move: precalc_option.0,
+                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
+                });
             }
         }
-        Ok(best_move)
+        Ok(DecidedMove {
+            suggested_move: best_move.0,
+            move_score: best_move.1,
+        })
     }
     // We only want to include this function with non wasm
     #[cfg(not(target_arch = "wasm32"))]
@@ -401,7 +407,7 @@ impl MonteCarloTree {
         roll_out_new: bool,
         number_of_averages: u32,
         pre_calc: &PreCalc,
-    ) -> Result<(Move, (f32, u32)), Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<DecidedMove, Box<dyn std::error::Error + Sync + Send>> {
         if number_of_simulations >= self.mc_node.number_visits() {
             if self.mc_node.number_visits() >= VISIT_LIMIT {
                 // We're running too close to the integer limit
@@ -447,13 +453,16 @@ impl MonteCarloTree {
             println!("best precalc alernativie is {:?}", precalc_option);
             if precalc_option.1 > best_move.1 .0 / best_move.1 .1 as f32 {
                 println!("best precalc alernativie better");
-                return Ok((
-                    precalc_option.0,
-                    (precalc_option.1 * 250_000_000.0, 250_000_000),
-                ));
+                return Ok(DecidedMove {
+                    suggested_move: precalc_option.0,
+                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
+                });
             }
         }
-        Ok(best_move)
+        Ok(DecidedMove {
+            suggested_move: best_move.0,
+            move_score: best_move.1,
+        })
     }
 }
 
@@ -1002,7 +1011,7 @@ pub fn recursive_monte_carlo(
                 // We probably want to include an enum type for this scenario....
                 // Hmm of course this is not the same as rolled out.
                 if depth >= 1 {
-                    if let Some(roll_out_result) = precalc.roll_out_score(&board) {
+                    if let Some((roll_out_result, _)) = precalc.roll_out_score(&board) {
                         to_return.game_count += 1;
                         to_return.score_zero += roll_out_result;
                         to_return.last_visit_count =
@@ -1240,6 +1249,18 @@ pub fn recursive_monte_carlo(
     to_return
 }
 
+pub struct AIMove {
+    pub suggested_move: Move,
+    pub move_coordinates: (usize, usize),
+    pub number_of_simulations: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DecidedMove {
+    pub suggested_move: Move,
+    pub move_score: (f32, u32),
+}
+
 impl AIControlledBoard {
     pub fn is_played_out(&self) -> bool {
         self.relevant_mc_tree.mc_node.played_out()
@@ -1338,11 +1359,7 @@ impl AIControlledBoard {
         (move_result, number_of_simulations)
     }
 
-    pub fn ai_move(
-        &mut self,
-        number_of_steps: u32,
-        pre_calc: &PreCalc,
-    ) -> (Move, (usize, usize), u32) {
+    pub fn ai_move(&mut self, number_of_steps: u32, pre_calc: &PreCalc) -> AIMove {
         let ai_move = self
             .relevant_mc_tree
             .decide_move(
@@ -1358,27 +1375,27 @@ impl AIControlledBoard {
             .unwrap();
         log::info!(
             "AI move estimates {:?}, so win rate is {:.1}%",
-            (ai_move.0, ai_move.1),
-            ai_move.1 .0 as f32 / ai_move.1 .1 as f32 * 100.0
+            (ai_move.suggested_move, ai_move.move_score),
+            ai_move.move_score.0 as f32 / ai_move.move_score.1 as f32 * 100.0
         );
         //};
-        match ai_move.0 {
+        match ai_move.suggested_move {
             Move::PawnMove(first_step, second_step) => {
                 let mut next_board = self.board.clone();
                 next_board.game_move(Move::PawnMove(first_step, second_step));
                 let pos = next_board.pawns[self.board.turn % 2].position;
 
-                (
-                    Move::PawnMove(first_step, second_step),
-                    (pos.row as usize, pos.col as usize),
-                    ai_move.1 .1,
-                )
+                return AIMove {
+                    suggested_move: Move::PawnMove(first_step, second_step),
+                    move_coordinates: (pos.row as usize, pos.col as usize),
+                    number_of_simulations: ai_move.move_score.1,
+                };
             }
-            Move::Wall(dir, loc) => (
-                Move::Wall(dir, loc),
-                (loc.row as usize, loc.col as usize),
-                ai_move.1 .1,
-            ),
+            Move::Wall(dir, loc) => AIMove {
+                suggested_move: Move::Wall(dir, loc),
+                move_coordinates: (loc.row as usize, loc.col as usize),
+                number_of_simulations: ai_move.move_score.1,
+            },
         }
     }
 
@@ -1767,13 +1784,13 @@ pub fn select_robust_best_branch<'a>(
             }
         }
         if node_scores.1 >= visits_cutoff {
-            log::info!(
-                "{:?}, {:?}, {}, {:.2}",
-                move_option.0,
-                node_scores,
-                move_option.2,
-                node_scores.0 / node_scores.1 as f32 * 100.0
-            );
+            //log::info!(
+            //    "{:?}, {:?}, {}, {:.2}",
+            //    move_option.0,
+            //    node_scores,
+            //    move_option.2,
+            //    node_scores.0 / node_scores.1 as f32 * 100.0
+            //);
         }
         best_score = best_score.max(node_scores.0 / node_scores.1 as f32);
         if node_scores.1 < max_visits {
@@ -1877,18 +1894,18 @@ mod tests {
 
             let decision_took = start.elapsed();
             let mut player_0_win_rate: f32 =
-                chosen_move.1 .0 as f32 / chosen_move.1 .1 as f32 * 100.0;
+                chosen_move.move_score.0 as f32 / chosen_move.move_score.1 as f32 * 100.0;
             if board.board.turn % 2 == 1 {
                 player_0_win_rate = 100.0 - player_0_win_rate;
             }
 
-            made_moves.push((chosen_move.0, player_0_win_rate / 100.0));
+            made_moves.push((chosen_move.suggested_move, player_0_win_rate / 100.0));
             println!(
                 "on turn {}, player {:?}, choses move: {:?} in {:?}. Win rate for player 0 is: {:.1}%",
-                board.board.turn, players_turn, (chosen_move.0, chosen_move.1),decision_took, player_0_win_rate,
+                board.board.turn, players_turn, (chosen_move.suggested_move, chosen_move.move_score),decision_took, player_0_win_rate,
             );
             println!("{}", board.board.encode());
-            if MoveResult::Win == board.board.game_move(chosen_move.0) {
+            if MoveResult::Win == board.board.game_move(chosen_move.suggested_move) {
                 let winner = (board.board.turn + 1) % 2;
                 let match_result = MatchResult {
                     winner: player_params[winner],
@@ -1952,8 +1969,14 @@ mod tests {
                 &pre_calc,
             )
             .unwrap();
-        println!("chosen move is {:?}", (chosen_move.0, chosen_move.1));
-        assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Up, None));
+        println!(
+            "chosen move is {:?}",
+            (chosen_move.suggested_move, chosen_move.move_score)
+        );
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::PawnMove(PawnMove::Up, None)
+        );
         board.board.pawns[0].position = Position { row: 7, col: 4 };
         let chosen_move = board
             .relevant_mc_tree
@@ -1968,8 +1991,14 @@ mod tests {
                 &pre_calc,
             )
             .unwrap();
-        assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Up, None));
-        println!("chosen move is {:?}", (chosen_move.0, chosen_move.1));
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::PawnMove(PawnMove::Up, None)
+        );
+        println!(
+            "chosen move is {:?}",
+            (chosen_move.suggested_move, chosen_move.move_score)
+        );
     }
 
     #[test]
@@ -1998,8 +2027,8 @@ mod tests {
             .unwrap();
         println!(
             "chosen move is {:?}, win_rate is {}",
-            (chosen_move.0, chosen_move.1),
-            chosen_move.1 .0 / chosen_move.1 .1 as f32
+            (chosen_move.suggested_move, chosen_move.move_score),
+            chosen_move.move_score.0 / chosen_move.move_score.1 as f32
         );
         board.board.pawns[0].position = Position { row: 0, col: 0 };
         board.board.pawns[1].position = Position { row: 1, col: 4 };
@@ -2019,10 +2048,13 @@ mod tests {
             .unwrap();
         println!(
             "chosen move is {:?}, win_rate is {}",
-            (chosen_move.0, chosen_move.1),
-            chosen_move.1 .0 / chosen_move.1 .1 as f32
+            (chosen_move.suggested_move, chosen_move.move_score),
+            chosen_move.move_score.0 / chosen_move.move_score.1 as f32
         );
-        assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Up, None));
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::PawnMove(PawnMove::Up, None)
+        );
     }
 
     fn test_new_logic() {
@@ -2169,7 +2201,10 @@ mod tests {
                 .unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
         let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
-        assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Left, None));
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::PawnMove(PawnMove::Left, None)
+        );
 
         let board =
             Board::decode("34;3F5;2A4;A1h;C1v;D2h;F2h;H2h;C3v;B4h;D4v;B5h;D5h;G5h;C6v;D6h;A7h;C7h")
@@ -2179,7 +2214,7 @@ mod tests {
         let chosen_move = ai_controlled.ai_move(400_000, &PreCalc::new());
 
         assert_eq!(
-            chosen_move.0,
+            chosen_move.suggested_move,
             Move::Wall(WallDirection::Horizontal, Position { row: 5, col: 7 })
         );
     }
@@ -2194,7 +2229,7 @@ mod tests {
         let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
 
         assert_eq!(
-            chosen_move.0,
+            chosen_move.suggested_move,
             Move::Wall(WallDirection::Horizontal, Position { row: 1, col: 3 })
         );
     }
@@ -2210,7 +2245,7 @@ mod tests {
         let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
 
         assert_eq!(
-            chosen_move.0,
+            chosen_move.suggested_move,
             Move::Wall(WallDirection::Horizontal, Position { row: 2, col: 3 })
         );
     }
@@ -2237,7 +2272,7 @@ mod tests {
 
         // To decide on this move, it needs a lottttttt of calculations
         assert_eq!(
-            chosen_move.0,
+            chosen_move.suggested_move,
             Move::Wall(WallDirection::Horizontal, Position { row: 4, col: 2 })
         );
     }
@@ -2252,8 +2287,9 @@ mod tests {
 
         // To decide on this move, it needs a lottttttt of calculations
         assert!(
-            chosen_move.0 == Move::Wall(WallDirection::Horizontal, Position { row: 7, col: 1 })
-                || chosen_move.0
+            chosen_move.suggested_move
+                == Move::Wall(WallDirection::Horizontal, Position { row: 7, col: 1 })
+                || chosen_move.suggested_move
                     == Move::Wall(WallDirection::Vertical, Position { row: 7, col: 2 })
         );
     }
@@ -2267,7 +2303,9 @@ mod tests {
         let mut ai_controlled = AIControlledBoard::from_board(board);
         let chosen_move = ai_controlled.ai_move(60_000, &PreCalc::new());
 
-        assert!(chosen_move.0 == Move::PawnMove(PawnMove::Right, Some(PawnMove::Right)));
+        assert!(
+            chosen_move.suggested_move == Move::PawnMove(PawnMove::Right, Some(PawnMove::Right))
+        );
 
         let scores_opponent = ai_controlled.relevant_mc_tree.mc_node.scores();
         assert!((scores_opponent.0 / scores_opponent.1 as f32) < 0.5);
