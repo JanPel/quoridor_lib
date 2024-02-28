@@ -1,10 +1,5 @@
 use super::*;
-use std::collections::{BinaryHeap, VecDeque};
-use std::sync::atomic::AtomicU32;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
+use std::collections::BinaryHeap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum JumpResult {
@@ -253,10 +248,9 @@ impl Board {
     }
 
     // Here we check if only one pawn has a one wall left. And if there paths don't overlap
-    pub fn one_wall_roll_out(&self, cache: &[NextMovesCache; 2]) -> Option<(f32)> {
+    pub fn one_wall_roll_out(&self, cache: &[NextMovesCache; 2]) -> Option<f32> {
         let (pawn_without_walls, pawn_no_walls_cache, index) =
-            if (self.pawns[1].number_of_walls_left == 1 && self.pawns[0].number_of_walls_left == 0)
-            {
+            if self.pawns[1].number_of_walls_left == 1 && self.pawns[0].number_of_walls_left == 0 {
                 if self.is_overlap(
                     self.pawns[1],
                     self.pawns[0],
@@ -267,8 +261,8 @@ impl Board {
                     return None;
                 }
                 (self.pawns[0], &cache[0], 0)
-            } else if (self.pawns[0].number_of_walls_left == 1
-                && self.pawns[1].number_of_walls_left == 0)
+            } else if self.pawns[0].number_of_walls_left == 1
+                && self.pawns[1].number_of_walls_left == 0
             {
                 if self.is_overlap(
                     self.pawns[0],
@@ -334,7 +328,7 @@ impl Board {
     }
 
     pub fn winner_when_no_walls_or_single_paths(&self, cache: &[NextMovesCache; 2]) -> Option<f32> {
-        let distance_to_finish_line = [
+        let _distance_to_finish_line = [
             cache[0].distances_to_finish.dist[self.pawns[0].position].unwrap() as f32,
             cache[1].distances_to_finish.dist[self.pawns[1].position].unwrap() as f32,
         ];
@@ -368,10 +362,6 @@ impl Board {
                 Some(score_no_wall_used.min(score_with_turn_switched))
             }
         }
-    }
-
-    fn jump_on_paths(&self, cache: &[NextMovesCache; 2]) -> Option<JumpResult> {
-        unimplemented!()
     }
 
     fn overlapping_routes_to_finish(
@@ -577,6 +567,16 @@ impl Board {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::AtomicU32;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::time::Instant;
+    #[cfg(target_arch = "wasm32")]
+    use web_time::Instant;
+
+    use rand::SeedableRng;
+    use std::sync::Arc;
+
     use super::*;
     #[test]
     fn test_finish_dist_2_paths_1_wall() {
@@ -745,7 +745,7 @@ mod test {
 
     #[test]
     fn test_winner_walls_left() {
-        let mut board = Board::decode("10;0E1;0E9;D1v;E1v;D3v;E3v;D5v;E5v;D7v;E7v").unwrap();
+        let board = Board::decode("10;0E1;0E9;D1v;E1v;D3v;E3v;D5v;E5v;D7v;E7v").unwrap();
         let cache = [
             NextMovesCache::new(&board, 0),
             NextMovesCache::new(&board, 1),
@@ -755,7 +755,7 @@ mod test {
             Some(-1.0)
         );
 
-        let mut board = Board::decode("10;0E1;0E8;D1v;E1v;D3v;E3v;D5v;E5v;D7v;E7v").unwrap();
+        let board = Board::decode("10;0E1;0E8;D1v;E1v;D3v;E3v;D5v;E5v;D7v;E7v").unwrap();
         let cache = [
             NextMovesCache::new(&board, 0),
             NextMovesCache::new(&board, 1),
@@ -767,7 +767,7 @@ mod test {
             Some(1.0)
         );
 
-        let mut board = Board::decode("10;0E1;2E8;D1v;E1v;D3v;E3v;D5v;E5v;D7v;E7v").unwrap();
+        let board = Board::decode("10;0E1;2E8;D1v;E1v;D3v;E3v;D5v;E5v;D7v;E7v").unwrap();
         let cache = [
             NextMovesCache::new(&board, 0),
             NextMovesCache::new(&board, 1),
@@ -849,7 +849,7 @@ mod test {
     use crate::move_stats::PreCalc;
     #[test]
     fn test_speedup() {
-        let mut board = Board::decode("66;1B2;0A6;B1h;A2v;B3v;D3h;F3h;H3h;A4v;D4v;B5v;D5h;F5v;G5h;D6v;E6h;G6v;H6h;B7v;C8h;D8v").unwrap();
+        let board = Board::decode("66;1B2;0A6;B1h;A2v;B3v;D3h;F3h;H3h;A4v;D4v;B5v;D5h;F5v;G5h;D6v;E6h;G6v;H6h;B7v;C8h;D8v").unwrap();
         let mut mc_node = MCNode::Leaf;
         let mut small_rng = SmallRng::from_entropy();
         let mut timings = Timings::default();
@@ -910,12 +910,7 @@ mod test {
         );
         println!("monte carlo took: {:?}", start.elapsed());
         match mc_node {
-            MCNode::Branch {
-                move_options,
-                scores,
-                cache_index,
-                ..
-            } => {
+            MCNode::Branch { scores, .. } => {
                 println!("scores: {:?}", scores);
                 //println!("move options: {:?}", move_options);
             }
@@ -931,7 +926,7 @@ mod test {
 
     #[test]
     fn test_end_game_puzzle() {
-        let mut board = Board::decode(
+        let board = Board::decode(
             "41;0H5;2G6;B2v;D2v;E2v;C3h;F3h;H3h;D4v;F4h;D5h;E5v;A6h;C6h;D6v;G6h;D7h;H7v;E8v;H8h",
         )
         .unwrap();
@@ -1139,13 +1134,7 @@ mod test {
         if let Some(move_options) = mc_node.move_options() {
             for mc_node in move_options {
                 match &mc_node.1 {
-                    MCNode::Branch {
-                        move_options,
-                        scores_included,
-                        scores,
-                        cache_index,
-                        last_visited,
-                    } => {
+                    MCNode::Branch { scores, .. } => {
                         println!("move: {:?}, scores: {:?}", mc_node.0, scores);
                     }
                     MCNode::Leaf => {
@@ -1220,10 +1209,7 @@ mod test {
             "47;0H8;2C3;D3h;F3h;G3v;H3v;A4h;C4v;E4v;B5h;D5v;F5v;G5v;A6h;C6h;E6h;H6h;E7v;F7h;E8h",
         )
         .unwrap();
-        let cache = [
-            NextMovesCache::new(&board, 0),
-            NextMovesCache::new(&board, 1),
-        ];
+
         let mut mc_node = MCNode::Leaf;
         let mut small_rng = SmallRng::from_entropy();
         let mut timings = Timings::default();

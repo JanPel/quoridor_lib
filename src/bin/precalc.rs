@@ -1,10 +1,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
-use sysinfo::{Process, System};
+use sysinfo::System;
 
 use quoridor::*;
 
@@ -194,7 +193,7 @@ fn update_win_rate(board: &Board, precalc: Arc<Mutex<PreCalc>>) -> Option<bool> 
 
 // We will do this seperately for black and white.
 fn find_next_board_sequence(
-    ai_player: usize,
+    _ai_player: usize,
     start_board: Board,
 ) -> (Vec<Board>, AIControlledBoard) {
     // For the ai player we take the step that the monte carlo algorithm would take online.

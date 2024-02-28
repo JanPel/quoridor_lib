@@ -94,19 +94,6 @@ pub fn mirror_move(move_str: &str) -> String {
     }
 }
 
-pub fn is_mirrored(move_str: &str) -> Option<bool> {
-    if move_str.len() == 3 {
-        Some(RIGHT_WALLS.contains(&move_str.chars().next().unwrap()))
-    } else if move_str.len() == 2 {
-        if &move_str.chars().next().unwrap() == &'e' {
-            return None;
-        }
-        Some(RIGHT_PAWNS.contains(&move_str.chars().next().unwrap()))
-    } else {
-        panic!("Invalid move string: {}", move_str);
-    }
-}
-
 impl MoveStats {
     pub fn new() -> Self {
         Self {
@@ -116,28 +103,13 @@ impl MoveStats {
             children: HashMap::new(),
         }
     }
-    fn update(&mut self, moves: &[String], winner_first_player: bool) {
-        self.total_games += 1;
-        if winner_first_player {
-            self.wins_player_0 += 1;
-        } else {
-            self.wins_player_1 += 1;
-        }
 
-        if let Some(next_move) = moves.first() {
-            let entry = self
-                .children
-                .entry(next_move.to_string())
-                .or_insert(Self::new());
-            entry.update(&moves[1..], winner_first_player);
-        }
-    }
-
+    #[cfg(test)]
     fn pretty_print(&self, board: Board) {
         let mut queue = VecDeque::new();
         queue.push_back((self, "".to_string(), 0, board));
         let mut count = 0;
-        while let Some((next_to_print, moves_code, depth, mut board)) = queue.pop_back() {
+        while let Some((next_to_print, moves_code, depth, board)) = queue.pop_back() {
             if next_to_print.total_games <= 20 {
                 continue;
             }
@@ -163,7 +135,6 @@ impl MoveStats {
     fn best_move_for_player(&self, player: usize) -> Option<(f32, String)> {
         let mut best_move = None;
         let mut best_win_rate = 0.0;
-        let mut visits_best = 0;
         for (key, value) in &self.children {
             //if value.total_games < 6 {
             //    continue;
@@ -180,7 +151,6 @@ impl MoveStats {
 
             if win_rate >= best_win_rate {
                 best_win_rate = win_rate;
-                visits_best = value.total_games;
                 best_move = Some((win_rate, key.to_string()));
             }
         }
@@ -266,7 +236,7 @@ impl PreCalc {
     fn update_with_move_stats(&mut self, move_stats: &MoveStats, board: Board) {
         let mut queue = VecDeque::new();
         queue.push_back((move_stats, "".to_string(), 0, board));
-        while let Some((next_to_print, moves_code, depth, mut board)) = queue.pop_back() {
+        while let Some((next_to_print, moves_code, depth, board)) = queue.pop_back() {
             if next_to_print.total_games <= 3 || board.turn >= 16 {
                 continue;
             }

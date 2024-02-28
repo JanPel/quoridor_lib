@@ -1,17 +1,10 @@
 mod end_game;
 mod walls;
 
-use std::char::MAX;
 use std::collections::{BinaryHeap, VecDeque};
-use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
 
 use rand::prelude::SliceRandom;
 use rand::rngs::SmallRng;
-use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::PlayerMoveResult;
@@ -42,23 +35,6 @@ const PAWN_MOVES_UP_LAST: [PawnMove; 4] = [
     PawnMove::Right,
     PawnMove::Up,
 ];
-
-pub fn pretty_print(squares: [[Option<i8>; 9]; 9]) {
-    let mut buffer = String::new();
-    for row in 0..9 {
-        for col in 0..9 {
-            buffer.push_str("|");
-            if let Some(distance) = squares[row][col] {
-                // we want the distance to take up three digits
-                buffer.push_str(&format!("{:>3}", distance));
-            } else {
-                buffer.push_str(" . ");
-            }
-        }
-        buffer.push_str("|\n");
-    }
-    println!("{}", buffer);
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PawnMove {
@@ -328,188 +304,6 @@ impl Pawn {
             goal_row,
             number_of_walls_left,
         })
-    }
-}
-
-pub struct BlockedOff {
-    squares: [[i8; 9]; 9],
-}
-
-impl BlockedOff {
-    fn new(board: &Board, pawn: Pawn) -> Self {
-        unimplemented!()
-    }
-    fn create_lines_on_pawn(
-        open_routes: &OpenRoutes,
-        pawn: Pawn,
-    ) -> Vec<((u8, [Position; MAX_LINE_LENGTH]), WallDirection)> {
-        let mut pawn_lines = vec![];
-        let pawn_pos = pawn.position;
-        for line_dir in [PawnMove::Up, PawnMove::Right] {
-            for line_len in 0..MAX_LINE_LENGTH {
-                let mut left_corner = pawn_pos;
-                match line_dir {
-                    PawnMove::Up => {
-                        if (pawn_pos.row - line_len as i8) < 0 {
-                            continue;
-                        }
-                        left_corner.row -= line_len as i8;
-                    }
-                    PawnMove::Right => {
-                        if (pawn_pos.col - line_len as i8) < 0 {
-                            continue;
-                        }
-                        left_corner.col -= line_len as i8;
-                    }
-                    _ => {
-                        panic!("Doesnt happen")
-                    }
-                }
-                let line_direction = match line_dir {
-                    PawnMove::Left | PawnMove::Right => WallDirection::Horizontal,
-                    PawnMove::Up | PawnMove::Down => WallDirection::Vertical,
-                };
-                if let Some(line) = open_routes.create_line(left_corner, line_dir) {
-                    if line.0 >= line_len as u8 {
-                        pawn_lines.push((line, line_direction));
-                    }
-                }
-            }
-        }
-
-        pawn_lines
-    }
-    fn update_pawn_move(
-        &mut self,
-        pawn: Pawn,
-        pawn_move: PawnMove,
-        open_routes: &OpenRoutes,
-        relevant_squares: &RelevantSquares,
-        distances_to_finish: &DistancesToFinish,
-    ) {
-        let mut new_pawn = pawn.clone();
-        new_pawn.position = pawn.position.add_move(pawn_move);
-
-        // These lines we want to add, cause they are now blocking off stuff after the pawn move
-        for new_pawn_line in Self::create_lines_on_pawn(open_routes, pawn) {
-            if let Some((line_length, pocket)) = open_routes.check_blocked_off_by_line(
-                new_pawn_line.0,
-                new_pawn_line.1,
-                new_pawn,
-                relevant_squares,
-                &distances_to_finish.dist,
-            ) {
-                let line_score = if line_length <= 3 { 2 } else { 1 };
-                for row in 0..9 {
-                    for col in 0..9 {
-                        let pos = Position { row, col };
-                        if pocket[pos].is_some() {
-                            self.squares[pos] += line_score;
-                        }
-                    }
-                }
-            }
-        }
-        // These lines we want to substract, cause they ware blocking off stuff but not anymore
-        for old_pawn_line in Self::create_lines_on_pawn(open_routes, new_pawn) {
-            if let Some((line_length, pocket)) = open_routes.check_blocked_off_by_line(
-                old_pawn_line.0,
-                old_pawn_line.1,
-                pawn,
-                relevant_squares,
-                &distances_to_finish.dist,
-            ) {
-                let line_score = if line_length <= 3 { 2 } else { 1 };
-                for row in 0..9 {
-                    for col in 0..9 {
-                        let pos = Position { row, col };
-                        if pocket[pos].is_some() {
-                            self.squares[pos] -= line_score;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // The bool indicates whether the line is added or not possible anymore
-    // true means a new line, false means the line is not possible anymore
-    fn new_lines_from_wall(
-        board: &Board,
-        new_board: &Board,
-    ) -> Vec<(u8, [Position; MAX_LINE_LENGTH], WallDirection, bool)> {
-        ///
-        unimplemented!()
-    }
-
-    fn update_wall_move(
-        &mut self,
-        old_board: &Board,
-        new_board: &Board,
-        wall_move: (WallDirection, Position),
-        rel_squares: &RelevantSquares,
-        allowed_walls: &AllowedWalls,
-        pawn_index: usize,
-    ) {
-        match allowed_walls[wall_move] {
-            WallType::Pocket => {
-                // Here we should probably set all squares in the pocket to 0, but shouldn't matter for how we use it.
-                return ();
-            }
-            _ => (),
-        }
-        // Now we want to see how many sides the wall touches, in case that is
-        // In case the wall touches on 2 sides, we skip
-        if old_board
-            .walls
-            .connect_on_two_points(wall_move.0, wall_move.1, None)
-        {
-            // We want to recalculate it.
-            *self = Self::new(new_board, new_board.pawns[pawn_index]);
-        }
-
-        unimplemented!();
-    }
-
-    fn update_move(
-        &mut self,
-        old_board: &Board,
-        new_board: &Board,
-        game_move: Move,
-        rel_squares: &RelevantSquares,
-        allowed_walls: &AllowedWalls,
-        distances_to_finish: &DistancesToFinish,
-        pawn_index: usize,
-    ) {
-        match game_move {
-            Move::PawnMove(first_step, second_step) => {
-                let pawn = old_board.pawns[old_board.turn % 2];
-                self.update_pawn_move(
-                    pawn,
-                    first_step,
-                    &old_board.open_routes,
-                    rel_squares,
-                    distances_to_finish,
-                );
-                if let Some(second_step) = second_step {
-                    self.update_pawn_move(
-                        pawn,
-                        second_step,
-                        &old_board.open_routes,
-                        rel_squares,
-                        distances_to_finish,
-                    );
-                }
-            }
-            Move::Wall(wall_dir, wall_pos) => self.update_wall_move(
-                old_board,
-                new_board,
-                (wall_dir, wall_pos),
-                rel_squares,
-                allowed_walls,
-                pawn_index,
-            ),
-        }
     }
 }
 
@@ -981,7 +775,6 @@ impl RelevantSquares {
                         allowed_walls,
                         true,
                     );
-                    updated_distances = true;
                 }
                 if new_board
                     .walls
@@ -1043,8 +836,8 @@ impl DistancesToFinish {
         if closest_dist == self.dist[pawn_pos] {
             return true;
         }
-        let mut comp_row = pawn_pos.row;
-        let mut comp_col = pawn_pos.col;
+        let _comp_row = pawn_pos.row;
+        let _comp_col = pawn_pos.col;
         let add_to_index = match wall_dir {
             WallDirection::Horizontal => {
                 if wall_pos.row == pawn_pos.row {
@@ -2102,8 +1895,8 @@ impl OpenRoutes {
         //println!("positions: {:?}", positions);
         //println!("other_side {:?}", other_side);
 
-        let mut min_pawn_distance = relevant_squares.squares[line[0]].unwrap();
-        let mut min_finish_distance = distances_from_finish[line[0]].unwrap();
+        let min_pawn_distance = relevant_squares.squares[line[0]].unwrap();
+        let min_finish_distance = distances_from_finish[line[0]].unwrap();
 
         for position in line {
             if self.is_open(position, first_move) {
@@ -2282,7 +2075,6 @@ pub struct Board {
     pub walls: Walls,
     allowed_walls: Walls,
     pub open_routes: OpenRoutes,
-    probable_next_walls: Arc<Mutex<Option<Walls>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
@@ -2320,7 +2112,6 @@ impl Board {
             walls: Walls::default(),
             allowed_walls: Walls::new_allowed(),
             open_routes: OpenRoutes::new(),
-            probable_next_walls: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -2520,28 +2311,6 @@ impl Board {
         let allowed_walls =
             self.allowed_walls_for_pawn(self.pawns[pawn_index], &distance_to_finish);
         RelevantSquares::new(self, pawn_index, &distance_to_finish, &allowed_walls)
-    }
-
-    fn probable_next_walls(&self) -> Walls {
-        let cached = self.probable_next_walls.lock().unwrap().clone();
-        if let Some(walls) = cached {
-            walls
-        } else {
-            let cache = [NextMovesCache::new(&self, 0), NextMovesCache::new(&self, 1)];
-            let mut walls = Walls::new();
-            let next_moves =
-                self.next_moves_with_scoring(true, &mut SmallRng::from_entropy(), &cache);
-            for game_move in next_moves {
-                if game_move.1 < 0 {
-                    continue;
-                }
-                if let Move::Wall(direction, location) = game_move.0 {
-                    walls.place_wall(direction, location);
-                }
-            }
-            *self.probable_next_walls.lock().unwrap() = Some(walls);
-            walls
-        }
     }
 
     fn two_points_connected(
@@ -2978,7 +2747,6 @@ impl Board {
     }
 
     pub fn game_move(&mut self, game_move: Move) -> MoveResult {
-        *self.probable_next_walls.lock().unwrap() = None;
         match game_move {
             Move::PawnMove(pawn_move, second_pawn_move) => {
                 self.move_pawn((pawn_move, second_pawn_move))
@@ -3486,21 +3254,6 @@ impl Board {
         }
     }
 
-    // This should calculate the manhatten distance between the wall and the pawn.
-    fn distance_to_pawn(&self, wall_move: (WallDirection, Position), pawn: Pawn) -> usize {
-        let Position { row, col } = wall_move.1;
-
-        let Position {
-            row: pawn_row,
-            col: pawn_col,
-        } = pawn.position;
-
-        let horizontal_distance = (row - pawn_row).abs().min((row + 1 - pawn_row).abs()) as usize;
-        let vertical_distance = (col - pawn_col).abs().min((col + 1 - pawn_col).abs()) as usize;
-
-        horizontal_distance + vertical_distance
-    }
-
     #[cfg(test)]
     fn on_shortest_path_pawn(
         &self,
@@ -3631,6 +3384,15 @@ impl Move {
 
 #[cfg(test)]
 mod test {
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::time::Instant;
+    #[cfg(target_arch = "wasm32")]
+    use web_time::Instant;
+
+    use rand::SeedableRng;
+
+    use super::*;
+
     #[test]
     fn test_wall_on_path() {
         let mut board = Board::new();
@@ -3653,57 +3415,6 @@ mod test {
         assert!(board.on_shortest_path_pawn((WallDirection::Horizontal, (7, 5).into()), 0));
     }
 
-    #[test]
-    fn test_distance_to_pawn() {
-        use super::*;
-        let mut board = Board::new();
-
-        board.pawns[0].position = Position { row: 8, col: 4 };
-        let pawn_0 = board.pawns[0];
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (7, 3).into()), pawn_0);
-        assert_eq!(distance, 0);
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (7, 4).into()), pawn_0);
-        assert_eq!(distance, 0);
-
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (7, 3).into()), pawn_0);
-        assert_eq!(distance, 0);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (7, 4).into()), pawn_0);
-        assert_eq!(distance, 0);
-
-        board.pawns[0].position = Position { row: 4, col: 4 };
-        let pawn_0 = board.pawns[0];
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (7, 3).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (7, 4).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (7, 3).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (7, 4).into()), pawn_0);
-        assert_eq!(distance, 3);
-
-        board.pawns[0].position = Position { row: 4, col: 3 };
-        let pawn_0 = board.pawns[0];
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (7, 3).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (7, 4).into()), pawn_0);
-        assert_eq!(distance, 4);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (7, 3).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (7, 4).into()), pawn_0);
-        assert_eq!(distance, 4);
-
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (0, 3).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Horizontal, (0, 4).into()), pawn_0);
-        assert_eq!(distance, 4);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (0, 3).into()), pawn_0);
-        assert_eq!(distance, 3);
-        let distance = board.distance_to_pawn((WallDirection::Vertical, (0, 4).into()), pawn_0);
-        assert_eq!(distance, 4);
-    }
-    use crate::ai::AIControlledBoard;
-
-    use super::*;
     #[test]
     fn test_wall_allowed() {
         let mut board = Board::new();
@@ -4793,9 +4504,8 @@ mod test {
 
     #[test]
     fn test_relevant_squares_end() {
-        let mut board = Board::decode("66;1B2;0A6;B1h;A2v;B3v;D3h;F3h;H3h;A4v;D4v;B5v;D5h;F5v;G5h;D6v;E6h;G6v;H6h;B7v;C8h;D8v").unwrap();
+        let board = Board::decode("66;1B2;0A6;B1h;A2v;B3v;D3h;F3h;H3h;A4v;D4v;B5v;D5h;F5v;G5h;D6v;E6h;G6v;H6h;B7v;C8h;D8v").unwrap();
 
-        let start = Instant::now();
         let distances_to_finish =
             board.distance_to_finish_line(1).dist[board.pawns[1].position].unwrap();
         let cache = NextMovesCache::new(&board, 1);
@@ -4819,11 +4529,11 @@ mod test {
         )
         .unwrap();
         let start = Instant::now();
-        let cache = NextMovesCache::new(&board, 0);
+        NextMovesCache::new(&board, 0);
         println!("whole cache calc took: {:?}", start.elapsed());
 
         let start = Instant::now();
-        let new_cache = old_cache.next_cache(
+        old_cache.next_cache(
             Move::PawnMove(PawnMove::Right, None),
             &prev_board,
             &board,
@@ -4836,7 +4546,7 @@ mod test {
         let rel_squares = board.test_version_find_all_squares_relevant_for_pawn(0);
         println!("cache calc took: {:?}", start.elapsed());
         assert_eq!(rel_squares.number_of_squares, 12);
-        let mut board = Board::decode(
+        let board = Board::decode(
             "41;2H7;1B3;A1h;C1v;D2h;F2h;H2h;C3v;B4h;D4v;B5h;D5h;G5h;C6v;D6h;H6h;A7h;C7h;E7h",
         )
         .unwrap();
@@ -4852,9 +4562,7 @@ mod test {
         )
         .unwrap();
 
-        let start = Instant::now();
         let cache = NextMovesCache::new(&board, 0);
-
         let next_board = Board::decode(
             "37;1F5;1A4;A1h;C1v;D2h;F2h;H2h;A3h;C3v;F3v;B4h;D4v;B5h;D5h;G5h;C6v;D6h;F6h;A7h;C7h",
         )

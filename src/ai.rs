@@ -6,8 +6,6 @@ use std::io::{Read, Write};
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
@@ -181,7 +179,7 @@ impl MonteCarloTree {
     pub fn serialize_to_file(&self, file_name: &str) {
         let mut file = std::fs::File::create(file_name).unwrap();
         let mut buffer = Vec::new();
-        let mc_tree = MonteCarloTreeSerialize::from(self.clone());
+        let mc_tree = MonteCarloTreeSerialize::from(self);
         println!(
             "LAST VISIT COUNT IS: {} and cache id = {}",
             mc_tree.last_visit_count, mc_tree.cache_id
@@ -219,7 +217,7 @@ impl MonteCarloTree {
         for game_move in board.next_non_mirrored_moves() {
             let mut next_board = board.clone();
             next_board.game_move(game_move);
-            if let Some((score_precalc, mirror_known)) = pre_calc.roll_out_score(&next_board) {
+            if let Some((score_precalc, _mirror_known)) = pre_calc.roll_out_score(&next_board) {
                 let score_for_current_player = if board.turn % 2 == 0 {
                     score_precalc
                 } else {
@@ -283,8 +281,8 @@ impl MonteCarloTree {
         if number_of_simulations >= 1 {
             let mut small_rng = SmallRng::from_entropy();
             let mut timings = Timings::default();
-            let start = Instant::now();
-            let res = recursive_monte_carlo(
+            Instant::now();
+            recursive_monte_carlo(
                 board.clone(),
                 &mut self.mc_node,
                 &mut small_rng,
@@ -353,8 +351,7 @@ impl MonteCarloTree {
         if number_of_simulations >= 1 {
             let mut small_rng = SmallRng::from_entropy();
             let mut timings = Timings::default();
-            let start = Instant::now();
-            let res = multithreaded_mc(
+            multithreaded_mc(
                 board.clone(),
                 &mut self.mc_node,
                 number_of_threads,
@@ -422,8 +419,7 @@ impl MonteCarloTree {
         if number_of_simulations >= 1 {
             let mut small_rng = SmallRng::from_entropy();
             let mut timings = Timings::default();
-            let start = Instant::now();
-            let res = multithreaded_mc(
+            multithreaded_mc(
                 board.clone(),
                 &mut self.mc_node,
                 80,
@@ -738,7 +734,7 @@ fn split_up_move_options(
         -(x.1.ucb_score(x.2.max(0), parent_visits, explore_constant) * 1000000.0) as i32
     });
     let mut number_threads_to_best = {
-        let (game_move, _, number_of_next_to_best, _) =
+        let (_game_move, _, number_of_next_to_best, _) =
             select_next_node(move_options, parent_visits, explore_constant).unwrap();
         //println!(
         //    "Number of next to best: {}, move is: {:?}",
@@ -798,7 +794,7 @@ fn split_up_move_options(
             let mut splits = vec![0; number_of_threads as usize];
             let mut index = 0;
             let mut index_add = 1;
-            remainder.sort_by_cached_key(|x| {
+            remainder.sort_by_cached_key(|_x| {
                 let key: i32 = index % number_of_threads as i32;
                 index += index_add;
                 if index % number_of_threads as i32 == 0 {
@@ -855,7 +851,7 @@ pub fn monte_carlo_moves(
         let result = {
             // If there are leaves, we select one, run through it and continue.
             // If there are no leaves, we select the most promising branch.
-            let (chosen_move, node, moves_allowed, played_out_node) =
+            let (chosen_move, node, moves_allowed, _played_out_node) =
                 select_next_node(move_options, parent_visits, explore_constant)
                     .expect("Next moves is empty");
 
@@ -1765,7 +1761,7 @@ pub fn select_robust_best_branch<'a>(
     let mut best_score: f32 = 0.0;
     let mut chosen_move_score = (0.0, 0);
     let mut chosen_move = None;
-    let visits_cutoff = moves[(moves.len() - moves.len().min(10))].1.number_visits();
+    let visits_cutoff = moves[moves.len() - moves.len().min(10)].1.number_visits();
     for move_option in moves.iter() {
         let node_scores;
         match &move_option.1 {
@@ -1784,13 +1780,13 @@ pub fn select_robust_best_branch<'a>(
             }
         }
         if node_scores.1 >= visits_cutoff {
-            //log::info!(
-            //    "{:?}, {:?}, {}, {:.2}",
-            //    move_option.0,
-            //    node_scores,
-            //    move_option.2,
-            //    node_scores.0 / node_scores.1 as f32 * 100.0
-            //);
+            log::info!(
+                "{:?}, {:?}, {}, {:.2}",
+                move_option.0,
+                node_scores,
+                move_option.2,
+                node_scores.0 / node_scores.1 as f32 * 100.0
+            );
         }
         best_score = best_score.max(node_scores.0 / node_scores.1 as f32);
         if node_scores.1 < max_visits {
@@ -1819,130 +1815,8 @@ pub fn select_robust_best_branch<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::io::Write;
-
     use super::*;
     use crate::ai::AIControlledBoard;
-
-    #[derive(Debug)]
-    struct MatchResult {
-        winner: (u32, Option<f32>, f32, bool, bool, bool, u32),
-        winner_started: bool,
-        opponent: (u32, Option<f32>, f32, bool, bool, bool, u32),
-        // if the game is lasting more then a 100 turns, we will call it a draw
-        draw: bool,
-    }
-
-    // Here want to add the current score to this string as a new csv line
-    fn print_board_score(board: &Board, guessed_score: f32, end_score: f32, to_print: &mut String) {
-        let to_append = format!(
-            "{}, {:.4}, {:.4} \n",
-            board.encode(),
-            guessed_score,
-            end_score
-        );
-        to_print.push_str(&to_append);
-    }
-    fn print_moves_metrics(made_moves: &Vec<(Move, f32)>, file_name: String, end_score: f32) {
-        let mut to_print = "".to_string();
-        let mut board = Board::new();
-        for (_, made_move) in made_moves.iter().enumerate() {
-            board.game_move(made_move.0);
-            print_board_score(&board, made_move.1, end_score, &mut to_print);
-        }
-        // Here we want to create the file, if it doesn't exist yet
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(file_name)
-            .unwrap();
-        write!(file, "{}", to_print).unwrap();
-    }
-
-    fn get_match_result(
-        player_a_params: (u32, Option<f32>, f32, bool, bool, bool, u32),
-        player_b_params: (u32, Option<f32>, f32, bool, bool, bool, u32),
-    ) -> MatchResult {
-        let mut board = AIControlledBoard::player_first();
-        let player_params = [player_a_params, player_b_params];
-        let mut made_moves = vec![];
-        loop {
-            let players_turn = player_params[board.board.turn % 2];
-            let start = Instant::now();
-            let wall_value = if let Some(_wall_multiplier) = players_turn.1 {
-                // TODO: this is wrong
-                |x| x as f32 * 2.0
-            } else {
-                AIControlledBoard::wall_value
-            };
-
-            let pre_calc = PreCalc::new();
-            let chosen_move = board
-                .relevant_mc_tree
-                .decide_move(
-                    board.board.clone(),
-                    players_turn.0,
-                    wall_value,
-                    players_turn.2,
-                    players_turn.4,
-                    players_turn.5,
-                    players_turn.6,
-                    &pre_calc,
-                )
-                .unwrap();
-
-            let decision_took = start.elapsed();
-            let mut player_0_win_rate: f32 =
-                chosen_move.move_score.0 as f32 / chosen_move.move_score.1 as f32 * 100.0;
-            if board.board.turn % 2 == 1 {
-                player_0_win_rate = 100.0 - player_0_win_rate;
-            }
-
-            made_moves.push((chosen_move.suggested_move, player_0_win_rate / 100.0));
-            println!(
-                "on turn {}, player {:?}, choses move: {:?} in {:?}. Win rate for player 0 is: {:.1}%",
-                board.board.turn, players_turn, (chosen_move.suggested_move, chosen_move.move_score),decision_took, player_0_win_rate,
-            );
-            println!("{}", board.board.encode());
-            if MoveResult::Win == board.board.game_move(chosen_move.suggested_move) {
-                let winner = (board.board.turn + 1) % 2;
-                let match_result = MatchResult {
-                    winner: player_params[winner],
-                    winner_started: winner == 0,
-                    opponent: player_params[(board.board.turn) % 2],
-                    draw: false,
-                };
-                let cache = [
-                    NextMovesCache::new(&board.board, 0),
-                    NextMovesCache::new(&board.board, 1),
-                ];
-                // the score is the distance of the other pawn to the finish line
-                let end_score = board.board.roll_out(
-                    &mut SmallRng::from_entropy(),
-                    wall_value,
-                    &cache,
-                    true,
-                    1,
-                );
-                print_moves_metrics(
-                    &made_moves,
-                    "game_results_board_test_diff.csv".to_string(),
-                    end_score.0,
-                );
-                return match_result;
-            }
-            if board.board.turn >= 120 {
-                let match_result = MatchResult {
-                    winner: player_a_params,
-                    winner_started: board.board.turn % 2 == 0,
-                    opponent: player_b_params,
-                    draw: true,
-                };
-                return match_result;
-            }
-        }
-    }
 
     #[test]
     fn ai_pick_finish_move() {
@@ -2057,97 +1931,6 @@ mod tests {
         );
     }
 
-    fn test_new_logic() {
-        let mut player_a_params = (60_000, None, 0.5, true, false, true, 100);
-        let player_a_clone = player_a_params;
-        let mut player_b_params = (60_000, None, 0.5, true, false, false, 1);
-
-        let win_sum = std::sync::Arc::new(std::sync::Mutex::new(0.0));
-        let draw_sum = std::sync::Arc::new(std::sync::Mutex::new(0.0));
-        let total_sum = std::sync::Arc::new(std::sync::Mutex::new(0));
-
-        // we want atomic f32s
-        let number_of_threads = 1;
-        let number_of_games = 1;
-        let mut threads = vec![];
-        for _ in 0..number_of_threads {
-            let win_sum = win_sum.clone();
-            let draw_sum = draw_sum.clone();
-            let total_sum = total_sum.clone();
-            let handle = std::thread::spawn(move || {
-                for _ in 1..(number_of_games / number_of_threads + 1) {
-                    std::mem::swap(&mut player_a_params, &mut player_b_params);
-                    let match_result = get_match_result(player_a_params, player_b_params);
-                    println!("{:#?}", match_result);
-                    println!(
-                        "{}; {}; {}",
-                        match_result.winner.0, match_result.opponent.0, match_result.winner_started
-                    );
-
-                    let mut win_sum = win_sum.lock().unwrap();
-                    let mut draw_sum = draw_sum.lock().unwrap();
-                    let mut total_sum = total_sum.lock().unwrap();
-                    *total_sum += 1;
-                    if match_result.draw {
-                        *draw_sum += 1.0;
-                    } else {
-                        if match_result.winner == player_a_clone {
-                            *win_sum += 1.0;
-                        }
-                    }
-                    println!(
-                        "After {} games: Win rate for player 0 is: {:.1}%, draw rate is {:.1}%",
-                        *total_sum,
-                        *win_sum / *total_sum as f32 * 100.0,
-                        *draw_sum / *total_sum as f32 * 100.0,
-                    );
-                }
-            });
-            threads.push(handle);
-        }
-        for handle in threads {
-            handle.join().unwrap();
-        }
-        // Now we want to serialize the cache using bincode to the file called moves_cache
-    }
-
-    fn test_ai_battle() {
-        let opponents = vec![20_000, 40_000, 60_000, 120_000, 200_000, 400_000];
-        let mut match_ups_seen = HashSet::new();
-        for opponent in &opponents {
-            match_ups_seen.insert((*opponent, *opponent));
-        }
-        let mut match_results = vec![];
-
-        let number_of_matches = 10;
-        println!("winner; loser ; winner_started");
-        'outer: for player_a in &opponents {
-            for player_b in &opponents {
-                if match_ups_seen.get(&(*player_a, *player_b)).is_some() {
-                    continue 'outer;
-                }
-                match_ups_seen.insert((*player_b, *player_a));
-                for i in 0..number_of_matches {
-                    // we want to switch up who plays first
-                    let number_steps = if i % 2 == 0 {
-                        [player_a, player_b]
-                    } else {
-                        [player_b, player_a]
-                    };
-                    let match_result = get_match_result(
-                        (*number_steps[0], Some(2.0), 0.3, false, false, true, 1),
-                        (*number_steps[1], None, 0.3, false, false, true, 1),
-                    );
-                    println!(
-                        "{}; {}; {}",
-                        match_result.winner.0, match_result.opponent.0, match_result.winner_started
-                    );
-                    match_results.push(match_result);
-                }
-            }
-        }
-    }
-
     #[test]
     fn test_wrong_calc() {
         let mut board = AIControlledBoard::player_first();
@@ -2258,8 +2041,9 @@ mod tests {
         )
         .unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
+        let _chosen_move = ai_controlled.ai_move(300_000, &PreCalc::new());
 
+        // TODO!
         // Can also be wall vertical, multiple options basically
         //assert_eq!(chosen_move.0, Move::PawnMove(PawnMove::Down, None));
     }
