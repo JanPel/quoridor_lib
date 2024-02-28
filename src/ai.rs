@@ -278,10 +278,10 @@ impl MonteCarloTree {
     ) -> Result<DecidedMove, Box<dyn std::error::Error + Sync + Send>> {
         number_of_simulations = number_of_simulations.min(3_500_000_000);
 
+        let start = Instant::now();
         if number_of_simulations >= 1 {
             let mut small_rng = SmallRng::from_entropy();
             let mut timings = Timings::default();
-            Instant::now();
             recursive_monte_carlo(
                 board.clone(),
                 &mut self.mc_node,
