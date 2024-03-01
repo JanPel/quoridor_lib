@@ -422,7 +422,7 @@ impl MonteCarloTree {
             multithreaded_mc(
                 board.clone(),
                 &mut self.mc_node,
-                80,
+                1,
                 number_of_simulations,
                 &mut small_rng,
                 0,
@@ -2107,11 +2107,24 @@ mod tests {
         let board = Board::decode("14;8F6;8D5;D3h;C6h;E6v;E8v").unwrap();
 
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(1_200_000, &PreCalc::new());
+        let chosen_move = ai_controlled.ai_move(100_000, &PreCalc::new());
 
         assert_eq!(
             chosen_move.suggested_move,
             Move::Wall(WallDirection::Horizontal, Position { row: 4, col: 5 })
+        );
+    }
+
+    #[test]
+    fn stop_back_easily_blocked_off() {
+        let board = Board::decode("15;8F6;8D5;D3h;C6h;E6v;E8v").unwrap();
+
+        let mut ai_controlled = AIControlledBoard::from_board(board);
+        let chosen_move = ai_controlled.ai_move(200_000, &PreCalc::new());
+
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::Wall(WallDirection::Horizontal, Position { row: 5, col: 5 })
         );
     }
 }

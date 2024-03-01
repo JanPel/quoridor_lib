@@ -113,11 +113,43 @@ impl<const ROWS: usize, const COLS: usize, T> std::ops::IndexMut<Position> for [
     }
 }
 
-#[derive(Debug)]
-pub struct CheckPocketResponse {
+pub struct CheckPocketResponseNew {
     wall_allowed: bool,
     is_pocket: bool,
-    reached_otherside: bool,
+    // If we reached the otherside, the number indicates in how many steps we reached the other side of the wall
+    reached_otherside: Option<i8>,
+    pawn_seen: bool,
+    goal_row_seen: bool,
+    // The area that is on this part of the wall
+    area_seen: [[Option<u8>; 9]; 9],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WallEffect {
+    DistanceOtherside(i8),
+    AreaLeftPawn([[Option<u8>; 9]; 9]),
+}
+impl WallEffect {
+    fn wall_score(&self, rel_squares: RelevantSquares) -> i8 {
+        match self {
+            WallEffect::DistanceOtherside(steps) => *steps,
+            WallEffect::AreaLeftPawn(area) => {
+                let mut number_of_squares_left_relevant = 0;
+                for row in 0..9 {
+                    for col in 0..9 {
+                        let pos = Position { row, col };
+                        if area[pos].is_some()
+                            && rel_squares.squares[pos].is_some()
+                            && rel_squares.squares[pos] != Some(-1)
+                        {
+                            number_of_squares_left_relevant += 1;
+                        }
+                    }
+                }
+                rel_squares.number_of_squares - number_of_squares_left_relevant
+            }
+        }
+    }
 }
 
 impl Position {
@@ -898,7 +930,8 @@ impl NextMovesCache {
         let pawn = board.pawns[pawn_index];
 
         let distances_to_finish = board.distance_to_finish_line(pawn_index);
-        let allowed_walls_for_pawn = board.allowed_walls_for_pawn(pawn, &distances_to_finish);
+        let (allowed_walls_for_pawn, wall_effects) =
+            board.allowed_walls_for_pawn(pawn, &distances_to_finish);
 
         let relevant_squares = RelevantSquares::new(
             board,
@@ -906,9 +939,12 @@ impl NextMovesCache {
             &distances_to_finish,
             &allowed_walls_for_pawn,
         );
+        let allowed_walls_with_score =
+            wall_effects.new_allowed_with_score(relevant_squares, allowed_walls_for_pawn);
+
         Self {
             relevant_squares,
-            allowed_walls_for_pawn,
+            allowed_walls_for_pawn: allowed_walls_with_score,
             distances_to_finish,
         }
     }
@@ -923,7 +959,7 @@ impl NextMovesCache {
         let new_distances = self
             .distances_to_finish
             .calculate_new_cache(game_move, pawn_index, new_board);
-        let new_allowed_walls = self.allowed_walls_for_pawn.calculate_new_cache(
+        let (new_allowed_walls, wall_effects) = self.allowed_walls_for_pawn.calculate_new_cache(
             game_move,
             old_board.pawns[pawn_index],
             is_this_cache_turn,
@@ -939,9 +975,12 @@ impl NextMovesCache {
             &new_distances,
             &new_allowed_walls,
         );
+
+        let allowed_walls_with_score =
+            wall_effects.new_allowed_with_score(new_relevant_squares, new_allowed_walls);
         Self {
             relevant_squares: new_relevant_squares,
-            allowed_walls_for_pawn: new_allowed_walls,
+            allowed_walls_for_pawn: allowed_walls_with_score,
             distances_to_finish: new_distances,
         }
     }
@@ -1499,7 +1538,7 @@ impl OpenRoutes {
                     for relevant_walls in current.relevant_walls(pawn_move) {
                         let wall_type = allowed_walls[relevant_walls];
                         match wall_type {
-                            WallType::Allowed | WallType::Pocket => {
+                            WallType::Allowed(_) | WallType::Pocket => {
                                 continue 'inner;
                             }
                             WallType::Impossible => (),
@@ -1959,7 +1998,7 @@ impl OpenRoutes {
         pawn: Pawn,
         other_side: [Position; 2],
         // returns: wall_allowed, is_pocket_0, is_pocket_1, reached_otherside
-    ) -> CheckPocketResponse {
+    ) -> CheckPocketResponseNew {
         let mut distance: [[Option<u8>; 9]; 9] = [[None; 9]; 9];
         let mut queue: ArrayDeque<Position, 40> = ArrayDeque::new();
         //let mut queue: VecDeque<Position> = VecDeque::new();
@@ -1975,7 +2014,7 @@ impl OpenRoutes {
             goal_row_seen = goal_row_seen || position.row == pawn.goal_row;
         }
         let moves_order = PAWN_MOVES_UP_LAST;
-        let mut reached_otherside = false;
+        let mut reached_otherside = None;
         while !queue.is_empty() {
             let current = queue.pop_front().unwrap();
             let current_distance = distance[current];
@@ -1986,7 +2025,7 @@ impl OpenRoutes {
                     pawn_seen = pawn_seen || next == pawn.position;
                     if other_side.contains(&next) {
                         // In case that we reached the otherside, the wall is always allowed, and never a pocket, so we can break quicker
-                        reached_otherside = true;
+                        reached_otherside = current_distance.map(|x| (x + 1) as i8);
                         break;
                     }
                     let distance = &mut distance[next];
@@ -1998,10 +2037,14 @@ impl OpenRoutes {
                 }
             }
         }
-        CheckPocketResponse {
-            wall_allowed: !(pawn_seen && !goal_row_seen) || reached_otherside,
-            is_pocket: !(goal_row_seen || pawn_seen || reached_otherside),
+        // TODO: To decide on a wall score, see how big the area that is blocked off is, or how many steps it takes to walk around a wall.
+        CheckPocketResponseNew {
+            wall_allowed: !(pawn_seen && !goal_row_seen) || reached_otherside.is_some(),
+            is_pocket: !(goal_row_seen || pawn_seen || reached_otherside.is_some()),
+            pawn_seen,
+            goal_row_seen,
             reached_otherside,
+            area_seen: distance,
         }
     }
 
@@ -2182,8 +2225,9 @@ impl Board {
         &self,
         pawn: Pawn,
         distance_to_finish: &DistancesToFinish,
-    ) -> AllowedWalls {
+    ) -> (AllowedWalls, WallEffects) {
         let mut allowed_walls = AllowedWalls::new();
+        let mut wall_effects = WallEffects::new();
         for row in 0..8 {
             for col in 0..8 {
                 let location = Position {
@@ -2196,15 +2240,17 @@ impl Board {
                         allowed_walls[wall] = WallType::Impossible;
                     }
                     // Here we update walls that not allowed because of path blocking
-                    allowed_walls[wall] = self.is_wall_allowed_pawn_new(
+                    let (allowed, effect) = self.is_wall_allowed_pawn_new(
                         (*direction, location),
                         pawn,
                         distance_to_finish,
                     );
+                    allowed_walls[wall] = allowed;
+                    wall_effects[wall] = effect;
                 }
             }
         }
-        allowed_walls
+        (allowed_walls, wall_effects)
     }
 
     pub fn allowed_walls(&self) -> Walls {
@@ -2308,7 +2354,7 @@ impl Board {
         pawn_index: usize,
     ) -> RelevantSquares {
         let distance_to_finish = self.distance_to_finish_line(pawn_index);
-        let allowed_walls =
+        let (allowed_walls, effects) =
             self.allowed_walls_for_pawn(self.pawns[pawn_index], &distance_to_finish);
         RelevantSquares::new(self, pawn_index, &distance_to_finish, &allowed_walls)
     }
@@ -2328,6 +2374,28 @@ impl Board {
         let pawn_one_pocket = distances_from_pawns[1].is_none()
             || cache[1].allowed_walls_for_pawn[(direction, location)] == WallType::Pocket;
         !(pawn_zero_pocket && pawn_one_pocket)
+    }
+
+    fn wall_score(
+        &self,
+        direction: WallDirection,
+        location: Position,
+        cache: &[NextMovesCache; 2],
+        pawn_index: usize,
+    ) -> i8 {
+        let wall = (direction, location);
+        let score_pawn_0 = cache[0].allowed_walls_for_pawn[wall].wall_score();
+        let score_pawn_1 = cache[1].allowed_walls_for_pawn[wall].wall_score();
+        let score = if score_pawn_0 == score_pawn_1 {
+            score_pawn_0
+        } else {
+            return if pawn_index == 0 {
+                score_pawn_0 - score_pawn_1
+            } else {
+                score_pawn_1 - score_pawn_0
+            };
+        };
+        score / 3
     }
 
     fn wall_move_metrics(
@@ -2389,6 +2457,7 @@ impl Board {
             number_of_walls_wall_connect,
             distance_from_our_shortest_path: distance_from_shortest_path[self.turn % 2],
             distance_from_their_shortest_path: distance_from_shortest_path[(self.turn + 1) % 2],
+            wall_score: self.wall_score(wall_direction, location, cache, self.turn % 2),
         })
     }
 
@@ -2630,8 +2699,10 @@ impl Board {
                             wall_diff_score,
                         ) {
                             if wall_metrics.is_probable() {
-                                next_moves
-                                    .push((Move::Wall(*direction, location), wall_diff_score));
+                                next_moves.push((
+                                    Move::Wall(*direction, location),
+                                    wall_metrics.move_score(),
+                                ));
                             } else {
                                 next_moves.push((Move::Wall(*direction, location), -100));
                             }
@@ -3076,15 +3147,15 @@ impl Board {
         wall: (WallDirection, Position),
         pawn: Pawn,
         distances_to_finish: &DistancesToFinish,
-    ) -> WallType {
+    ) -> (WallType, Option<WallEffect>) {
         if !self.allowed_walls[wall] {
-            return WallType::Impossible;
+            return (WallType::Impossible, None);
         }
 
         let (left, middle_top, middle_bottom, right) =
             self.walls.connected_points(wall.0, wall.1, None);
         if (left as u8 + (middle_top || middle_bottom) as u8 + right as u8) <= 1 {
-            return WallType::Allowed;
+            return (WallType::Allowed(0), None);
         }
         if let Some(wall_sides) = self.walls.sides_of_wall(wall.0, wall.1) {
             let vertical_last_row = if pawn.goal_row == 0 {
@@ -3095,31 +3166,45 @@ impl Board {
             let mut open_routes = self.open_routes.clone();
             open_routes.update_open(wall.0, wall.1);
             let pocket_result_0 = open_routes.check_if_pocket(wall_sides[0], pawn, wall_sides[1]);
-            if pocket_result_0.reached_otherside {
-                return WallType::Allowed;
+            if pocket_result_0.reached_otherside.is_some() {
+                return (
+                    WallType::Allowed(0),
+                    Some(WallEffect::DistanceOtherside(
+                        pocket_result_0.reached_otherside.unwrap(),
+                    )),
+                );
             }
             if pocket_result_0.is_pocket {
-                return WallType::Pocket;
+                return (WallType::Pocket, None);
             }
             if !pocket_result_0.wall_allowed {
-                return WallType::Unallowed;
+                return (WallType::Unallowed, None);
             }
             let pocket_result_1 = open_routes.check_if_pocket(wall_sides[1], pawn, wall_sides[0]);
             if pocket_result_1.is_pocket {
-                return WallType::Pocket;
+                return (WallType::Pocket, None);
             }
+            let area_left = if pocket_result_0.pawn_seen {
+                pocket_result_0.area_seen
+            } else {
+                pocket_result_1.area_seen
+            };
             if pocket_result_0.wall_allowed && pocket_result_1.wall_allowed {
                 if vertical_last_row {
-                    return WallType::Pocket;
+                    return (WallType::Pocket, None);
                 } else {
-                    return WallType::Allowed;
+                    return (
+                        WallType::Allowed(0),
+                        Some(WallEffect::AreaLeftPawn(area_left)),
+                    );
                 }
             } else {
-                WallType::Unallowed
+                (WallType::Unallowed, None)
             }
         } else {
             if distances_to_finish.wall_parrallel(wall.0, wall.1) {
-                return WallType::Allowed;
+                // TODO:
+                return (WallType::Allowed(0), None);
             }
             let wall_distance_to_finish =
                 closest_square_distance(wall.1, &distances_to_finish.dist);
@@ -3128,7 +3213,7 @@ impl Board {
             if wall_distance_to_finish.is_none()
                 || wall_distance_to_finish >= pawn_distance_to_finish
             {
-                return WallType::Allowed;
+                return (WallType::Allowed(0), None);
             }
             let mut open_routes = self.open_routes.clone();
             open_routes.update_open(wall.0, wall.1);
@@ -3136,9 +3221,9 @@ impl Board {
                 .find_path_for_pawn_to_dest_row(pawn, false)
                 .is_none()
             {
-                return WallType::Unallowed;
+                return (WallType::Unallowed, None);
             }
-            return WallType::Allowed;
+            return (WallType::Allowed(0), None);
         }
     }
 
@@ -3176,6 +3261,7 @@ pub struct WallMoveMetrics {
     number_of_walls_wall_connect: i8,
     distance_from_our_shortest_path: i8,
     distance_from_their_shortest_path: i8,
+    wall_score: i8,
 }
 
 impl WallMoveMetrics {
@@ -3193,6 +3279,7 @@ impl WallMoveMetrics {
             "number_of_visits"
         );
     }
+
     pub fn print_as_csv_line(&self, scores: Option<(f64, usize)>) {
         let win_rate = scores.map(|x| x.0 / x.1 as f64);
         let win_rate = win_rate.map(|x| x.to_string()).unwrap_or("".to_string());
@@ -3234,6 +3321,10 @@ impl WallMoveMetrics {
         } else {
             false
         }
+    }
+
+    pub fn move_score(&self) -> i8 {
+        self.shortest_path_difference + self.wall_score
     }
 }
 
@@ -3601,7 +3692,7 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     pawn,
-                    &board.allowed_walls_for_pawn(pawn, &distances_to_finish),
+                    &board.allowed_walls_for_pawn(pawn, &distances_to_finish).0,
                     0
                 )
                 .0,
@@ -3634,7 +3725,7 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     pawn,
-                    &board.allowed_walls_for_pawn(pawn, &distances_to_finish),
+                    &board.allowed_walls_for_pawn(pawn, &distances_to_finish).0,
                     0
                 )
                 .0,
@@ -3664,7 +3755,7 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     pawn,
-                    &board.allowed_walls_for_pawn(pawn, &distances_to_finish),
+                    &board.allowed_walls_for_pawn(pawn, &distances_to_finish).0,
                     0
                 )
                 .0,
@@ -3701,7 +3792,9 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     board.pawns[0],
-                    &board.allowed_walls_for_pawn(board.pawns[0], &distances_to_finish),
+                    &board
+                        .allowed_walls_for_pawn(board.pawns[0], &distances_to_finish)
+                        .0,
                     0
                 )
                 .0,
@@ -3747,7 +3840,9 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     board.pawns[0],
-                    &board.allowed_walls_for_pawn(board.pawns[0], &distances_to_finish),
+                    &board
+                        .allowed_walls_for_pawn(board.pawns[0], &distances_to_finish)
+                        .0,
                     0
                 )
                 .0,
@@ -3814,7 +3909,9 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     board.pawns[0],
-                    &board.allowed_walls_for_pawn(board.pawns[0], &distances_to_finish),
+                    &board
+                        .allowed_walls_for_pawn(board.pawns[0], &distances_to_finish)
+                        .0,
                     0
                 )
                 .0,
@@ -3858,7 +3955,9 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     board.pawns[1],
-                    &board.allowed_walls_for_pawn(board.pawns[1], &distances_to_finish),
+                    &board
+                        .allowed_walls_for_pawn(board.pawns[1], &distances_to_finish)
+                        .0,
                     0
                 )
                 .0,
@@ -3902,7 +4001,9 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     board.pawns[1],
-                    &board.allowed_walls_for_pawn(board.pawns[1], &distances_to_finish),
+                    &board
+                        .allowed_walls_for_pawn(board.pawns[1], &distances_to_finish)
+                        .0,
                     0
                 )
                 .0,
@@ -4002,7 +4103,9 @@ mod test {
                 .open_routes
                 .find_all_squares_relevant_for_pawn(
                     board.pawns[0],
-                    &board.allowed_walls_for_pawn(board.pawns[0], &distances_to_finish),
+                    &board
+                        .allowed_walls_for_pawn(board.pawns[0], &distances_to_finish)
+                        .0,
                     0
                 )
                 .0,
@@ -4805,5 +4908,93 @@ mod test {
         );
         println!("{:?}", start.elapsed());
         assert_eq!(longest_route.pop().unwrap(), Position { row: 2, col: 6 });
+    }
+
+    #[test]
+    fn test_wall_score() {
+        let board = Board::decode("15;7F6;8D5;D3h;C6h;E6v;E8v;F5h").unwrap();
+
+        let proper_cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+
+        let interesting_wall = (WallDirection::Horizontal, Position { row: 4, col: 7 });
+        println!(
+            "SCORE WALL FOR WHITE PLAYER : {}",
+            proper_cache[0].allowed_walls_for_pawn[interesting_wall].wall_score()
+        );
+        println!(
+            "SCORE WALL FOR BLACK PLAYER : {}",
+            proper_cache[1].allowed_walls_for_pawn[interesting_wall].wall_score()
+        );
+        // For player 0 this cuts of the whole back
+        assert_eq!(
+            proper_cache[0].allowed_walls_for_pawn[interesting_wall],
+            WallType::Allowed(60)
+        );
+
+        // for the black player this is a pocket
+        assert_eq!(
+            proper_cache[1].allowed_walls_for_pawn[interesting_wall],
+            WallType::Pocket
+        );
+    }
+    #[test]
+    fn test_wall_score_big_around_long() {
+        let board = Board::decode("3;8E1;9E9;D3v;D5v;E6h").unwrap();
+
+        let proper_cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+
+        let interesting_wall = (WallDirection::Vertical, Position { row: 0, col: 3 });
+        println!(
+            "SCORE WALL FOR WHITE PLAYER : {}",
+            proper_cache[0].allowed_walls_for_pawn[interesting_wall].wall_score()
+        );
+        println!(
+            "SCORE WALL FOR BLACK PLAYER : {}",
+            proper_cache[1].allowed_walls_for_pawn[interesting_wall].wall_score()
+        );
+        assert_eq!(
+            proper_cache[0].allowed_walls_for_pawn[interesting_wall].wall_score(),
+            16
+        );
+
+        assert_eq!(
+            proper_cache[1].allowed_walls_for_pawn[interesting_wall].wall_score(),
+            16
+        );
+    }
+
+    #[test]
+    fn test_wall_score_big_around_long_side_wall() {
+        let board = Board::decode("9;5E1;6E9;H3v;C4h;E4h;G4h;C5h;E5h;G5h;B6v;H6v").unwrap();
+
+        let proper_cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+
+        let interesting_wall = (WallDirection::Vertical, Position { row: 3, col: 3 });
+        println!(
+            "SCORE WALL FOR WHITE PLAYER : {}",
+            proper_cache[0].allowed_walls_for_pawn[interesting_wall].wall_score()
+        );
+        println!(
+            "SCORE WALL FOR BLACK PLAYER : {}",
+            proper_cache[1].allowed_walls_for_pawn[interesting_wall].wall_score()
+        );
+        assert_eq!(
+            proper_cache[0].allowed_walls_for_pawn[interesting_wall].wall_score(),
+            19
+        );
+
+        assert_eq!(
+            proper_cache[1].allowed_walls_for_pawn[interesting_wall].wall_score(),
+            19
+        );
     }
 }

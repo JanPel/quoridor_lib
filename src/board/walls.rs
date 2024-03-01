@@ -21,16 +21,24 @@ pub enum WallType {
     Impossible,
     // A wall thats can not be placed, cause it blocks another panw
     Unallowed,
-    Allowed,
+    Allowed(i8),
     Pocket,
 }
 
 impl WallType {
     pub fn is_allowed(&self) -> bool {
         match self {
-            WallType::Allowed => true,
+            WallType::Allowed(_) => true,
             WallType::Pocket => true,
             _ => false,
+        }
+    }
+
+    pub fn wall_score(&self) -> i8 {
+        match self {
+            WallType::Allowed(score) => *score,
+            WallType::Pocket => 0,
+            _ => -1,
         }
     }
 }
@@ -463,6 +471,69 @@ impl Walls {
         count
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WallEffects {
+    pub horizontal: [[Option<WallEffect>; 8]; 8],
+    pub vertical: [[Option<WallEffect>; 8]; 8],
+}
+
+impl WallEffects {
+    pub fn new() -> Self {
+        Self {
+            horizontal: [[None; 8]; 8],
+            vertical: [[None; 8]; 8],
+        }
+    }
+    pub fn new_allowed_with_score(
+        &self,
+        rel_squares: RelevantSquares,
+        mut old_allowed: AllowedWalls,
+    ) -> AllowedWalls {
+        for row in 0..8 {
+            for col in 0..8 {
+                for dir in [WallDirection::Horizontal, WallDirection::Vertical] {
+                    let pos = Position {
+                        row: row as i8,
+                        col: col as i8,
+                    };
+                    let wall = (dir, pos);
+                    let effect = &self[wall];
+                    if let Some(effect) = effect.as_ref() {
+                        match &mut old_allowed[wall] {
+                            WallType::Allowed(score) => {
+                                *score = effect.wall_score(rel_squares);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        old_allowed
+    }
+}
+
+impl std::ops::Index<(WallDirection, Position)> for WallEffects {
+    type Output = Option<WallEffect>;
+
+    fn index(&self, index: (WallDirection, Position)) -> &Self::Output {
+        let (wall_direction, pos) = index;
+        match wall_direction {
+            WallDirection::Horizontal => &self.horizontal[pos],
+            WallDirection::Vertical => &self.vertical[pos],
+        }
+    }
+}
+
+impl std::ops::IndexMut<(WallDirection, Position)> for WallEffects {
+    fn index_mut(&mut self, index: (WallDirection, Position)) -> &mut Self::Output {
+        let (wall_direction, pos) = index;
+        match wall_direction {
+            WallDirection::Horizontal => &mut self.horizontal[pos],
+            WallDirection::Vertical => &mut self.vertical[pos],
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AllowedWalls {
@@ -495,14 +566,14 @@ impl std::ops::IndexMut<(WallDirection, Position)> for AllowedWalls {
 impl AllowedWalls {
     pub const fn new() -> Self {
         Self {
-            horizontal: [[WallType::Allowed; 8]; 8],
-            vertical: [[WallType::Allowed; 8]; 8],
+            horizontal: [[WallType::Allowed(0); 8]; 8],
+            vertical: [[WallType::Allowed(0); 8]; 8],
         }
     }
     pub const fn zero() -> Self {
         Self {
-            horizontal: [[WallType::Allowed; 8]; 8],
-            vertical: [[WallType::Allowed; 8]; 8],
+            horizontal: [[WallType::Allowed(0); 8]; 8],
+            vertical: [[WallType::Allowed(0); 8]; 8],
         }
     }
     pub fn pretty_print_wall(&self) {
@@ -771,6 +842,7 @@ impl AllowedWalls {
 
         adjacent_walls
     }
+
     pub fn calculate_new_cache(
         mut self,
         game_move: Move,
@@ -780,29 +852,36 @@ impl AllowedWalls {
         did_cache_pawn_move: bool,
         new_board: &Board,
         distances: &DistancesToFinish,
-    ) -> Self {
+    ) -> (Self, WallEffects) {
+        let mut wall_effects = WallEffects::new();
         match game_move {
             Move::Wall(dir, pos) => {
                 if !new_board.walls.connect_on_two_points(dir, pos, None) {
                     // In this case we only need to check the walls that touch this wall. Cause this wall didn't block off any paths to the finish.
                     for wall in self.get_adjacent_walls(dir, pos) {
-                        self[wall] = new_board.is_wall_allowed_pawn_new(wall, pawn, distances)
+                        let (allowed, effect) =
+                            new_board.is_wall_allowed_pawn_new(wall, pawn, distances);
+                        self[wall] = allowed;
+                        wall_effects[wall] = effect;
                     }
                     self.update_allowed(dir, pos);
-                    return self;
+                    return (self, wall_effects);
                 };
                 new_board.allowed_walls_for_pawn(pawn, distances)
             }
             Move::PawnMove(first_step, second_step) => {
                 if !did_cache_pawn_move {
-                    return self;
+                    return (self, wall_effects);
                 }
                 let old_position = pawn.position;
                 pawn.position = pawn.position.add_pawn_moves(first_step, second_step);
                 for wall in wall_across_path(old_position, first_step, second_step) {
-                    self[wall] = new_board.is_wall_allowed_pawn_new(wall, pawn, distances);
+                    let (allowed, effect) =
+                        new_board.is_wall_allowed_pawn_new(wall, pawn, distances);
+                    self[wall] = allowed;
+                    wall_effects[wall] = effect;
                 }
-                self
+                (self, wall_effects)
             }
         }
     }
