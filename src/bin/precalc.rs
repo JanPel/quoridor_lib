@@ -412,6 +412,9 @@ fn pre_calculate_sub_board(board: Board, precalc: &PreCalc, to_exclude: Vec<Move
             suggested_move.move_score.0 / suggested_move.move_score.1 as f32 * 100.0,
             suggested_move.move_score.1
         );
+        if board.is_played_out() {
+            break;
+        }
         if get_current_process_vms() > 0.97 {
             println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");
             break;
@@ -630,7 +633,7 @@ fn main() {
     let precalc = Arc::new(Mutex::new(PreCalc::load(PRECALC_FILE).unwrap()));
     let start_board_basic = Board::decode("7;9E4;10E6;D3h").unwrap();
     //let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
-    let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
+    //let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
 
     //let parrallel_board = Board::decode("7;9E4;10E6;C3h").unwrap();
     let parrallel_board = Board::decode("5;9E3;10E7;D6h").unwrap();
@@ -641,7 +644,6 @@ fn main() {
         precalc_next_step(0, parrallel_board.clone(), precalc_parrallel.clone());
     });
     loop {
-        precalc_next_step(0, start_board_further.clone(), precalc.clone());
         precalc_next_step(1, start_board_basic.clone(), precalc.clone());
     }
 }

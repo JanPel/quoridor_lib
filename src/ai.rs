@@ -1787,6 +1787,13 @@ pub fn select_robust_best_branch<'a>(
                 move_option.2,
                 node_scores.0 / node_scores.1 as f32 * 100.0
             );
+            println!(
+                "{:?}, {:?}, {}, {:.2}",
+                move_option.0,
+                node_scores,
+                move_option.2,
+                node_scores.0 / node_scores.1 as f32 * 100.0
+            );
         }
         best_score = best_score.max(node_scores.0 / node_scores.1 as f32);
         if node_scores.1 < max_visits {
@@ -2093,5 +2100,18 @@ mod tests {
 
         let scores_opponent = ai_controlled.relevant_mc_tree.mc_node.scores();
         assert!((scores_opponent.0 / scores_opponent.1 as f32) < 0.5);
+    }
+
+    #[test]
+    fn back_easily_blocked_off() {
+        let board = Board::decode("14;8F6;8D5;D3h;C6h;E6v;E8v").unwrap();
+
+        let mut ai_controlled = AIControlledBoard::from_board(board);
+        let chosen_move = ai_controlled.ai_move(1_200_000, &PreCalc::new());
+
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::Wall(WallDirection::Horizontal, Position { row: 4, col: 5 })
+        );
     }
 }
