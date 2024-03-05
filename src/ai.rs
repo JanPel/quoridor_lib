@@ -2127,4 +2127,19 @@ mod tests {
             Move::Wall(WallDirection::Horizontal, Position { row: 5, col: 5 })
         );
     }
+    #[test]
+    fn apply_mirror_strategy() {
+        let board = Board::decode("13;6E4;7E6;A3h;C3h;D4v;E5v;D6v;F6h;H6h").unwrap();
+
+        let mut ai_controlled = AIControlledBoard::from_board(board);
+        let chosen_move = ai_controlled.ai_move(10_000, &PreCalc::new());
+
+        assert_eq!(
+            chosen_move.suggested_move,
+            Move::Wall(WallDirection::Vertical, Position { row: 2, col: 4 })
+        );
+        let scores = ai_controlled.relevant_mc_tree.mc_node.scores();
+        let win_rate_white = scores.0 / scores.1 as f32;
+        assert!(win_rate_white < 0.3);
+    }
 }

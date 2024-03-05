@@ -60,6 +60,20 @@ impl Walls {
         }
         new_walls
     }
+
+    pub fn is_point_mirror_symmetric(&self) -> bool {
+        for row in 0..8 {
+            for col in 0..8 {
+                if self.horizontal[7 - row][7 - col] != self.horizontal[row][col] {
+                    return false;
+                }
+                if self.vertical[7 - row][7 - col] != self.vertical[row][col] {
+                    return false;
+                }
+            }
+        }
+        true
+    }
     pub fn new_allowed() -> Self {
         Self {
             horizontal: [[true; 8]; 8],

@@ -288,6 +288,13 @@ impl Position {
             None
         }
     }
+
+    fn point_mirror_point(&self) -> Position {
+        Position {
+            row: 8 - self.row,
+            col: 8 - self.col,
+        }
+    }
 }
 
 impl From<(usize, usize)> for Position {

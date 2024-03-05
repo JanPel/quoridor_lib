@@ -23,12 +23,16 @@ impl Board {
                 return Some(distance_to_finish_line[1]);
             }
         }
+
         if distance_to_finish_line[self.turn % 2] == 1.0 {
             if self.turn % 2 == 0 {
                 return Some(distance_to_finish_line[1]);
             } else {
                 return Some(-distance_to_finish_line[0]);
             }
+        }
+        if let Some(mirror_winner) = self.mirror_strategy_winner(cache) {
+            return Some(mirror_winner);
         }
         if (self.pawns[1].number_of_walls_left == 0
             || cache[0].relevant_squares.number_of_squares <= 1)
@@ -562,6 +566,32 @@ impl Board {
         }
 
         return Some(((pawn_zero, pawn_one), jump_result, jump_effect));
+    }
+
+    fn mirror_strategy_winner(&self, cache: &[NextMovesCache; 2]) -> Option<f32> {
+        // First we check whether the board is point mirror symmetric
+        if self.pawns[0].position.point_mirror_point() != self.pawns[1].position {
+            return None;
+        }
+
+        if !self.walls.is_point_mirror_symmetric() {
+            return None;
+        }
+
+        // Now we check whether the pawns are on each others path to the finish, which would mean that avoiding the mirror is impossible
+        if (cache[0].relevant_squares.squares[self.pawns[1].position] == Some(-1)
+            || cache[0].relevant_squares.squares[self.pawns[1].position] == Some(0))
+            && (cache[1].relevant_squares.squares[self.pawns[0].position] == Some(-1)
+                || cache[1].relevant_squares.squares[self.pawns[0].position] == Some(0))
+        {
+            if self.turn % 2 == 0 {
+                return Some(-1.0);
+            } else {
+                return Some(1.0);
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -1246,5 +1276,50 @@ mod test {
             select_robust_best_branch(mc_node.move_options().unwrap(), &board).unwrap();
 
         assert!((move_chosen.1 .0 / move_chosen.1 .1 as f32) < 0.5);
+    }
+
+    #[test]
+    fn test_mirror_strategy_winner() {
+        let board = Board::decode(
+            "37;1F5;1A4;A1h;C1v;B2h;D2h;F2h;H2h;A3h;C3v;B4h;D4v;B5h;D5h;G5h;C6v;D6h;F6h;A7h;C7h",
+        )
+        .unwrap();
+        let cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        assert_eq!(board.mirror_strategy_winner(&cache), None);
+
+        let board = Board::decode("12;7E4;7E6;A3h;C3h;D4v;E5v;F6h;H6h").unwrap();
+        let cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        assert_eq!(board.mirror_strategy_winner(&cache), Some(-1.0));
+        assert_eq!(board.roll_out_finish(&cache), Some(-1.0));
+
+        let board = Board::decode("14;6E4;6E6;D3h;F3h;H3h;E4v;D5v;A6h;C6h;E6h").unwrap();
+        let cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        assert_eq!(board.mirror_strategy_winner(&cache), Some(-1.0));
+        assert_eq!(board.roll_out_finish(&cache), Some(-1.0));
+
+        let board = Board::decode("12;7E4;7E6;D3h;F3h;H3h;A6h;C6h;E6h").unwrap();
+        let cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        assert_eq!(board.mirror_strategy_winner(&cache), None);
+        assert_eq!(board.roll_out_finish(&cache), None);
+
+        let board = Board::decode("16;4E4;5E6;E1v;A3h;C3h;E3v;D4v;E5v;D6v;F6h;H6h;D8v").unwrap();
+        let cache = [
+            NextMovesCache::new(&board, 0),
+            NextMovesCache::new(&board, 1),
+        ];
+        assert_eq!(board.mirror_strategy_winner(&cache), Some(-1.0));
+        assert_eq!(board.roll_out_finish(&cache), Some(-1.0));
     }
 }
