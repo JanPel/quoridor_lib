@@ -635,8 +635,8 @@ fn main() {
     //let start_board_further = Board::decode("8;9E4;9E6;D3h;C6h").unwrap();
     //let start_board_further = Board::decode("9;8E4;9E6;D3h;C6h;E6v").unwrap();
 
-    //let parrallel_board = Board::decode("7;9E4;10E6;C3h").unwrap();
-    let parrallel_board = Board::decode("5;9E3;10E7;D6h").unwrap();
+    let parrallel_board = Board::decode("7;9E4;10E6;C3h").unwrap();
+    //let parrallel_board = Board::decode("5;9E3;10E7;D6h").unwrap();
 
     let precalc_parrallel = precalc.clone();
     // We want to calculate a board in parrallel

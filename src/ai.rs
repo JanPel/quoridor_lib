@@ -1787,13 +1787,13 @@ pub fn select_robust_best_branch<'a>(
                 move_option.2,
                 node_scores.0 / node_scores.1 as f32 * 100.0
             );
-            println!(
-                "{:?}, {:?}, {}, {:.2}",
-                move_option.0,
-                node_scores,
-                move_option.2,
-                node_scores.0 / node_scores.1 as f32 * 100.0
-            );
+            //println!(
+            //    "{:?}, {:?}, {}, {:.2}",
+            //    move_option.0,
+            //    node_scores,
+            //    move_option.2,
+            //    node_scores.0 / node_scores.1 as f32 * 100.0
+            //);
         }
         best_score = best_score.max(node_scores.0 / node_scores.1 as f32);
         if node_scores.1 < max_visits {
@@ -2056,10 +2056,21 @@ mod tests {
     }
     #[test]
     fn hard_puzzle() {
+        // Check if AI realizes that this is bad board for white
+        let board = Board::decode("18;6D4;5D6;C2h;C4v;C5h;E5h;G5h;D6h;F6h;H6h;C7v").unwrap();
+        let mut ai_controlled = AIControlledBoard::from_board(board);
+        let start = std::time::Instant::now();
+        ai_controlled.ai_move(300_000, &PreCalc::new());
+        println!(" 300_000 steps took: time taken: {:?}", start.elapsed());
+
+        let score = ai_controlled.relevant_mc_tree.mc_node.scores();
+        let win_rate_black = score.0 / score.1 as f32;
+        assert!(win_rate_black > 0.7);
+
         // See quoridor discord
         let board = Board::decode("17;6D4;6D6;C2h;C4v;E5h;G5h;D6h;F6h;H6h;C7v").unwrap();
         let mut ai_controlled = AIControlledBoard::from_board(board);
-        let chosen_move = ai_controlled.ai_move(10_300_000, &PreCalc::new());
+        let chosen_move = ai_controlled.ai_move(10_700_000, &PreCalc::new());
 
         // To decide on this move, it needs a lottttttt of calculations
         assert_eq!(
