@@ -113,13 +113,12 @@ impl<const ROWS: usize, const COLS: usize, T> std::ops::IndexMut<Position> for [
     }
 }
 
-pub struct CheckPocketResponseNew {
+pub struct CheckPocketResponse {
     wall_allowed: bool,
     is_pocket: bool,
     // If we reached the otherside, the number indicates in how many steps we reached the other side of the wall
     reached_otherside: Option<i8>,
     pawn_seen: bool,
-    goal_row_seen: bool,
     // The area that is on this part of the wall
     area_seen: [[Option<u8>; 9]; 9],
 }
@@ -2005,7 +2004,7 @@ impl OpenRoutes {
         pawn: Pawn,
         other_side: [Position; 2],
         // returns: wall_allowed, is_pocket_0, is_pocket_1, reached_otherside
-    ) -> CheckPocketResponseNew {
+    ) -> CheckPocketResponse {
         let mut distance: [[Option<u8>; 9]; 9] = [[None; 9]; 9];
         let mut queue: ArrayDeque<Position, 40> = ArrayDeque::new();
         //let mut queue: VecDeque<Position> = VecDeque::new();
@@ -2045,11 +2044,10 @@ impl OpenRoutes {
             }
         }
         // TODO: To decide on a wall score, see how big the area that is blocked off is, or how many steps it takes to walk around a wall.
-        CheckPocketResponseNew {
+        CheckPocketResponse {
             wall_allowed: !(pawn_seen && !goal_row_seen) || reached_otherside.is_some(),
             is_pocket: !(goal_row_seen || pawn_seen || reached_otherside.is_some()),
             pawn_seen,
-            goal_row_seen,
             reached_otherside,
             area_seen: distance,
         }
@@ -2361,7 +2359,7 @@ impl Board {
         pawn_index: usize,
     ) -> RelevantSquares {
         let distance_to_finish = self.distance_to_finish_line(pawn_index);
-        let (allowed_walls, effects) =
+        let (allowed_walls, _effects) =
             self.allowed_walls_for_pawn(self.pawns[pawn_index], &distance_to_finish);
         RelevantSquares::new(self, pawn_index, &distance_to_finish, &allowed_walls)
     }

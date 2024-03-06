@@ -643,6 +643,7 @@ fn main() {
     std::thread::spawn(move || loop {
         precalc_next_step(0, parrallel_board.clone(), precalc_parrallel.clone());
     });
+
     loop {
         precalc_next_step(1, start_board_basic.clone(), precalc.clone());
     }

@@ -212,6 +212,34 @@ impl MonteCarloTree {
         }
     }
 
+    pub fn select_best_move(
+        &mut self,
+        board: &Board,
+        pre_calc: &PreCalc,
+    ) -> Result<DecidedMove, Box<dyn std::error::Error + Sync + Send>> {
+        let move_options = self
+            .mc_node
+            .move_options()
+            .ok_or("Need to enough simulations to expand root leaf")?;
+        move_options.sort_by_key(|x| x.1.number_visits());
+        let best_move =
+            select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
+        if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
+            log::info!("best precalc alernativie is {:?}", precalc_option);
+            if precalc_option.1 >= best_move.1 .0 / best_move.1 .1 as f32 {
+                log::info!("best precalc alernativie better");
+                return Ok(DecidedMove {
+                    suggested_move: precalc_option.0,
+                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
+                });
+            }
+        };
+        Ok(DecidedMove {
+            suggested_move: best_move.0,
+            move_score: best_move.1,
+        })
+    }
+
     pub fn deeper_known_moves(&self, board: &Board, pre_calc: &PreCalc) -> Vec<(Move, f32)> {
         let mut known_moves = vec![];
         for game_move in board.next_non_mirrored_moves() {
@@ -301,28 +329,7 @@ impl MonteCarloTree {
             );
             log::info!("Deciding On move took: {:?}", start.elapsed());
         }
-        //println!("{:?}", timings);
-        let move_options = self
-            .mc_node
-            .move_options()
-            .ok_or("Need to enough simulations to expand root leaf")?;
-        move_options.sort_by_key(|x| x.1.number_visits());
-        let best_move =
-            select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
-        if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
-            log::info!("best precalc alernativie is {:?}", precalc_option);
-            if precalc_option.1 >= (best_move.1 .0 / best_move.1 .1 as f32) * 0.98 {
-                log::info!("best precalc alernativie better");
-                return Ok(DecidedMove {
-                    suggested_move: precalc_option.0,
-                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
-                });
-            }
-        }
-        Ok(DecidedMove {
-            suggested_move: best_move.0,
-            move_score: best_move.1,
-        })
+        self.select_best_move(&board, &pre_calc)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn decide_move_mc(
@@ -370,27 +377,7 @@ impl MonteCarloTree {
             );
         }
         //println!("{:?}", timings);
-        let move_options = self
-            .mc_node
-            .move_options()
-            .ok_or("Need to enough simulations to expand root leaf")?;
-        move_options.sort_by_key(|x| x.1.number_visits());
-        let best_move =
-            select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
-        if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
-            println!("best precalc alernativie is {:?}", precalc_option);
-            if precalc_option.1 > best_move.1 .0 / best_move.1 .1 as f32 {
-                println!("best precalc alernativie better");
-                return Ok(DecidedMove {
-                    suggested_move: precalc_option.0,
-                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
-                });
-            }
-        }
-        Ok(DecidedMove {
-            suggested_move: best_move.0,
-            move_score: best_move.1,
-        })
+        self.select_best_move(&board, &pre_calc)
     }
     // We only want to include this function with non wasm
     #[cfg(not(target_arch = "wasm32"))]
@@ -437,28 +424,7 @@ impl MonteCarloTree {
                 &pre_calc,
             );
         }
-        //println!("{:?}", timings);
-        let move_options = self
-            .mc_node
-            .move_options()
-            .ok_or("Need to enough simulations to expand root leaf")?;
-        move_options.sort_by_key(|x| x.1.number_visits());
-        let best_move =
-            select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
-        if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
-            println!("best precalc alernativie is {:?}", precalc_option);
-            if precalc_option.1 > best_move.1 .0 / best_move.1 .1 as f32 {
-                println!("best precalc alernativie better");
-                return Ok(DecidedMove {
-                    suggested_move: precalc_option.0,
-                    move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
-                });
-            }
-        }
-        Ok(DecidedMove {
-            suggested_move: best_move.0,
-            move_score: best_move.1,
-        })
+        self.select_best_move(&board, &pre_calc)
     }
 }
 
