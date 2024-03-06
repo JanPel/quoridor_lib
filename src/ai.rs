@@ -188,7 +188,28 @@ impl MonteCarloTree {
         file.write_all(&buffer).unwrap();
     }
 
-    fn deserialize_file(file_name: &str) -> Self {
+    pub fn update_scores_from_children(&mut self) {
+        let mut scores_children = (0.0, 0);
+        if let Some(move_options) = self.mc_node.move_options() {
+            for (_, node, _) in move_options.iter() {
+                let node_score = node.scores();
+                scores_children.0 += node_score.0;
+                scores_children.1 += node_score.1;
+            }
+        }
+
+        match &mut self.mc_node {
+            MCNode::Branch { scores, .. } => {
+                *scores = (
+                    scores_children.1 as f32 - scores_children.0,
+                    scores_children.1,
+                )
+            }
+            _ => (),
+        }
+    }
+
+    pub fn deserialize_file(file_name: &str) -> Self {
         let mut file = std::fs::File::open(file_name).unwrap();
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).unwrap();
@@ -225,9 +246,9 @@ impl MonteCarloTree {
         let best_move =
             select_robust_best_branch(move_options, &board).ok_or("Best move is unclear")?;
         if let Some(precalc_option) = self.score_from_deeper_precalc(&board, &pre_calc) {
-            log::info!("best precalc alernativie is {:?}", precalc_option);
+            //log::info!("best precalc alernativie is {:?}", precalc_option);
             if precalc_option.1 >= best_move.1 .0 / best_move.1 .1 as f32 {
-                log::info!("best precalc alernativie better");
+                //log::info!("best precalc alernativie better");
                 return Ok(DecidedMove {
                     suggested_move: precalc_option.0,
                     move_score: (precalc_option.1 * 250_000_000.0, 250_000_000),
@@ -1317,6 +1338,7 @@ impl AIControlledBoard {
                 number_of_simulations = self.relevant_mc_tree.mc_node.number_visits();
             }
         }
+        self.relevant_mc_tree.update_scores_from_children();
 
         (move_result, number_of_simulations)
     }
@@ -1335,12 +1357,11 @@ impl AIControlledBoard {
                 pre_calc,
             )
             .unwrap();
-        log::info!(
-            "AI move estimates {:?}, so win rate is {:.1}%",
-            (ai_move.suggested_move, ai_move.move_score),
-            ai_move.move_score.0 as f32 / ai_move.move_score.1 as f32 * 100.0
-        );
-        //};
+        //log::info!(
+        //    "AI move estimates {:?}, so win rate is {:.1}%",
+        //    (ai_move.suggested_move, ai_move.move_score),
+        //    ai_move.move_score.0 as f32 / ai_move.move_score.1 as f32 * 100.0
+        //);
         match ai_move.suggested_move {
             Move::PawnMove(first_step, second_step) => {
                 let mut next_board = self.board.clone();
@@ -1746,13 +1767,13 @@ pub fn select_robust_best_branch<'a>(
             }
         }
         if node_scores.1 >= visits_cutoff {
-            log::info!(
-                "{:?}, {:?}, {}, {:.2}",
-                move_option.0,
-                node_scores,
-                move_option.2,
-                node_scores.0 / node_scores.1 as f32 * 100.0
-            );
+            //log::info!(
+            //    "{:?}, {:?}, {}, {:.2}",
+            //    move_option.0,
+            //    node_scores,
+            //    move_option.2,
+            //    node_scores.0 / node_scores.1 as f32 * 100.0
+            //);
             //println!(
             //    "{:?}, {:?}, {}, {:.2}",
             //    move_option.0,

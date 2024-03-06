@@ -13,6 +13,8 @@ const PRECALC_FOLDER: &str = "./precalc";
 static NUMBER_PARELLEL_PRECALC: AtomicU32 = AtomicU32::new(0);
 const MAX_PARALLEL_PRECALC: u32 = 10;
 
+// We want to spawn the thread once there is room. So every ten seconds we check the static VARIABLE NUMBER_PARRELLEL_PRECALC to see if it is < 10,
+// if it is we spawn a new thread. Else we wait another 10 seconds. We want to atomically
 fn spawn_when_room<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> std::thread::JoinHandle<T> {
@@ -50,9 +52,6 @@ fn spawn_when_room<T: Send + 'static>(
         res
     })
 }
-
-// We want to spawn the thread once there is room. So every ten seconds we check the static VARIABLE NUMBER_PARRELLEL_PRECALC to see if it is < 10,
-// if it is we spawn a new thread. Else we wait another 10 seconds. We want to atomically
 
 fn remove_known_moves_for_precalc(
     mc_ref: &mut MCNode,
@@ -482,136 +481,6 @@ fn precalc_next_step(ai_player: usize, start_board: Board, precalc: Arc<Mutex<Pr
     }
     precalc.lock().unwrap().store(PRECALC_FILE);
 }
-
-//fn main() {
-//    let mut to_calc = PreCalc::open(PRECALC_FILE);
-//    while let Some(boards) = to_calc.get_unknown_without_unknown_children() {
-//        let mut inserts = vec![];
-//        std::thread::scope(|s| {
-//            {
-//                let mut handles = vec![];
-//                for board in boards.into_iter().take(8) {
-//                    let handle = s.spawn(|| {
-//                        println!("PRECALCULATING BOARD: {}", board.encode());
-//                        //let board_code = "6;10E4;10E6";
-//                        let mut board = AIControlledBoard::from_board(board);
-//                        //let relevant_mc_tree =
-//                        //    MonteCarloTree::deserialize("14;7E5;7D6;D3h;B4h;D4h;D5v;D7h;F7h.mc_node");
-//                        let simulations_per_step = 100_000;
-//                        let mut total_simulations = simulations_per_step;
-//                        //match &relevant_mc_tree.mc_node {
-//                        //    MCNode::Branch { scores, .. } => {
-//                        //        total_simulations = scores.1 + simulations_per_step;
-//                        //    }
-//                        //    _ => (),
-//                        //}
-//                        //board.relevant_mc_tree = relevant_mc_tree;
-//                        let mut i = 1;
-//
-//                        for _ in 0..(251 * 10) {
-//                            // After all legal moves for step one have been expanded.
-//                            if i == 3 {
-//                                println!(
-//                                    "REMOVING KNOWN MOVES: OLD MOVES AMOUNT IS: {}",
-//                                    board.relevant_mc_tree.mc_node.move_options().unwrap().len()
-//                                );
-//                                remove_known_moves_for_precalc(
-//                                    &mut board.relevant_mc_tree.mc_node,
-//                                    &board.board,
-//                                    &to_calc,
-//                                );
-//                                println!(
-//                                    "REMOVING KNOWN MOVES: NEW MOVES AMOUNT IS: {}",
-//                                    board.relevant_mc_tree.mc_node.move_options().unwrap().len()
-//                                );
-//                            }
-//                            board
-//                                .relevant_mc_tree
-//                                .decide_move(
-//                                    board.board.clone(),
-//                                    total_simulations,
-//                                    AIControlledBoard::wall_value,
-//                                    0.9,
-//                                    true,
-//                                    true,
-//                                    100,
-//                                    &to_calc,
-//                                )
-//                                .unwrap();
-//
-//                            total_simulations += simulations_per_step;
-//                            println!(
-//                                "--------------------- USING {:.4} % BYTES",
-//                                get_current_process_vms() * 100.0
-//                            );
-//                            if get_current_process_vms() > 0.91 {
-//                                println!("MEMORY USAGE HAS GOTTEN TOO HIGH, SO WE WILL STOP");
-//                                break;
-//                            }
-//                            // Every Million steps we prune
-//                            if i % 25 == 0 {
-//                                let start = Instant::now();
-//                                let visit_count = board
-//                                    .relevant_mc_tree
-//                                    .last_visit_count
-//                                    .fetch_add(0, Ordering::Relaxed);
-//                                let prune_amount = if get_current_process_vms() > 0.85 {
-//                                    4_000_000
-//                                } else if get_current_process_vms() > 0.7 {
-//                                    8_000_000
-//                                } else {
-//                                    40_000_000
-//                                };
-//                                if visit_count >= 10_000_000 {
-//                                    prune_nodes(
-//                                        &mut board.relevant_mc_tree.mc_node,
-//                                        visit_count - prune_amount,
-//                                        false,
-//                                    );
-//                                }
-//                                println!("Time to prune TREE is: {:?}", start.elapsed());
-//                            }
-//                            i += 1;
-//                        }
-//
-//                        prune_nodes(
-//                            &mut board.relevant_mc_tree.mc_node,
-//                            board
-//                                .relevant_mc_tree
-//                                .last_visit_count
-//                                .fetch_add(0, Ordering::Relaxed),
-//                            true,
-//                        );
-//                        std::thread::sleep(std::time::Duration::from_secs(10));
-//                        // Here we sleep for a bit, to let the process reclaim its memory.
-//
-//                        // submoves we are checking
-//                        board.relevant_mc_tree.serialize_to_file(&format!(
-//                            "{}/{}.mc_node",
-//                            PRECALC_FOLDER,
-//                            board.board.encode()
-//                        ));
-//                        (
-//                            board.board.clone(),
-//                            board
-//                                .relevant_mc_tree
-//                                .score_for_zero(&board.board, &to_calc),
-//                        )
-//                    });
-//                    handles.push(handle);
-//                }
-//                for handle in handles {
-//                    let (board, win_rate_zero) = handle.join().unwrap();
-//                    inserts.push((board, win_rate_zero));
-//                }
-//            }
-//        });
-//        for (board, result) in inserts {
-//            to_calc.insert_result(&board, result)
-//        }
-//        to_calc.store(PRECALC_FILE);
-//    }
-//}
 
 fn main() {
     //let start_board = Board::decode("13;7E5;7E6;D3h;F3h;H3h;D7h;F7h;H7h").unwrap();
