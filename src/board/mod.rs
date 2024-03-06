@@ -3,6 +3,7 @@ mod walls;
 
 use std::collections::{BinaryHeap, VecDeque};
 
+use bitvec::prelude::*;
 use rand::prelude::SliceRandom;
 use rand::rngs::SmallRng;
 use serde::{Deserialize, Serialize};
@@ -113,6 +114,46 @@ impl<const ROWS: usize, const COLS: usize, T> std::ops::IndexMut<Position> for [
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BitSquares {
+    squares: BitArr!(for 81, in u8, Lsb0),
+}
+
+impl BitSquares {
+    fn new() -> Self {
+        Self {
+            squares: bitarr!(u8,Lsb0;0;81),
+        }
+    }
+
+    fn set(&mut self, pos: Position, value: bool) {
+        let index = (pos.row * 8 + pos.col) as usize;
+        self.squares.set(index, value);
+    }
+}
+
+impl std::ops::Index<Position> for BitSquares {
+    type Output = bool;
+
+    fn index(&self, pos: Position) -> &Self::Output {
+        let index = (pos.row * 8 + pos.col) as usize;
+        &self.squares[index]
+    }
+}
+
+impl From<[[Option<u8>; 9]; 9]> for BitSquares {
+    fn from(input: [[Option<u8>; 9]; 9]) -> Self {
+        let mut squares = BitSquares::new();
+        for row in 0..9 {
+            for col in 0..9 {
+                let pos = Position { row, col };
+                squares.set(pos, input[pos].is_some());
+            }
+        }
+        squares
+    }
+}
+
 pub struct CheckPocketResponse {
     wall_allowed: bool,
     is_pocket: bool,
@@ -120,13 +161,13 @@ pub struct CheckPocketResponse {
     reached_otherside: Option<i8>,
     pawn_seen: bool,
     // The area that is on this part of the wall
-    area_seen: [[Option<u8>; 9]; 9],
+    area_seen: BitSquares,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WallEffect {
     DistanceOtherside(i8),
-    AreaLeftPawn([[Option<u8>; 9]; 9]),
+    AreaLeftPawn(BitSquares),
 }
 impl WallEffect {
     fn wall_score(&self, rel_squares: RelevantSquares) -> i8 {
@@ -137,7 +178,7 @@ impl WallEffect {
                 for row in 0..9 {
                     for col in 0..9 {
                         let pos = Position { row, col };
-                        if area[pos].is_some()
+                        if area[pos]
                             && rel_squares.squares[pos].is_some()
                             && rel_squares.squares[pos] != Some(-1)
                         {
@@ -2049,7 +2090,7 @@ impl OpenRoutes {
             is_pocket: !(goal_row_seen || pawn_seen || reached_otherside.is_some()),
             pawn_seen,
             reached_otherside,
-            area_seen: distance,
+            area_seen: distance.into(),
         }
     }
 
