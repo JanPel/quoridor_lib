@@ -2105,7 +2105,9 @@ mod tests {
         let board = Board::decode("14;8F6;8D5;D3h;C6h;E6v;E8v").unwrap();
 
         let mut ai_controlled = AIControlledBoard::from_board(board);
+        let start = std::time::Instant::now();
         let chosen_move = ai_controlled.ai_move(100_000, &PreCalc::new());
+        println!("{:?}", start.elapsed());
 
         assert_eq!(
             chosen_move.suggested_move,

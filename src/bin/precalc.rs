@@ -329,7 +329,11 @@ fn pre_calculate_board(board: Board, precalc: Arc<Mutex<PreCalc>>) {
     best_moves.sort_by_key(|x| (-(x.1 .0 / x.1 .1 as f32) * 10000.0) as i32);
     // Now we take the best 9 moves
     println!("For board: {}, THE BEST MOVES ARE: ", board.encode());
-    best_moves = best_moves.into_iter().take(7).collect();
+    best_moves = best_moves
+        .into_iter()
+        .take(7)
+        .filter(|(_, score)| score.0 / score.1 as f32 > 0.3)
+        .collect();
     for game_move in &best_moves {
         println!(
             "{:?}, with win rate {}",
